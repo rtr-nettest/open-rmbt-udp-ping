@@ -1,6 +1,7 @@
 # UDP Ping Client/Server System
 
 A Python implementation of a UDP-based ping client and server with systemd integration.
+The server uses port 8443.
 
 ## Features
 - Client with precise timing
@@ -30,7 +31,8 @@ systemctl start open-rmbt-udp-ping
 
 ## Client
 ```bash
-python3 src/client/udp_client.py <server_ip> <server_port>
+# Note: The default server port is 8443
+python3 client/udp_client.py <server_ip> <server_port>
 ```
 
 ## Monitoring
