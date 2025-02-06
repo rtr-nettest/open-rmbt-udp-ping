@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenRMBT UDP Ping Server
+After=network.target
+
+[Service]
+User=udp_ping
+Group=udp_ping
+WorkingDirectory=/opt/open-rmbt-udp-ping/server
+ExecStart=/usr/bin/python3 /opt/open-rmbt-udp-ping/server/udp-ping-server.py
+Restart=on-failure
+RestartSec=5s
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=udp-ping-server
+
+[Install]
+WantedBy=multi-user.target
