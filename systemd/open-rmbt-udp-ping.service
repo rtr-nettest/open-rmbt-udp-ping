@@ -12,6 +12,8 @@ RestartSec=5s
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=udp-ping-server
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target

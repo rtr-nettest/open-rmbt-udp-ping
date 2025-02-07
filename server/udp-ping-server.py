@@ -6,7 +6,7 @@ import struct
 
 def run_server():
     host = ''
-    port = 8443
+    port = 444
 
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.bind((host, port))

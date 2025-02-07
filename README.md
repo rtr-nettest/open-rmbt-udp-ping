@@ -1,7 +1,7 @@
 # UDP Ping Client/Server System
 
 A Python implementation of a UDP-based ping client and server with systemd integration.
-The server uses port 8443.
+The server uses port 444.
 
 ## Features
 - Client with precise timing
