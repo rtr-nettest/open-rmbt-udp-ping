@@ -37,5 +37,5 @@ python3 client/udp_ping_client.py <server_ip> <server_port>
 
 ## Monitoring
 ```bash
-journalctl -f -u udp-ping-server
+journalctl -f -u open-rmbt-udp-ping --lines=200
 ```
