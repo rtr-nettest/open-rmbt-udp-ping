@@ -1,7 +1,7 @@
 # UDP Ping Client/Server System
 
 A Python implementation of a UDP-based ping client and server with systemd integration.
-The server uses port 444.
+The default server UDP port is 444.
 
 ## Features
 - Client with precise timing
@@ -31,7 +31,6 @@ systemctl start open-rmbt-udp-ping
 
 ## Client
 ```bash
-# Note: The default server port is 8443
 python3 client/udp_ping_client.py <server_ip> <server_port>
 ```
 
