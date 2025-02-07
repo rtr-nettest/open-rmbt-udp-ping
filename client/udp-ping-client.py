@@ -19,7 +19,7 @@ class PingClient:
         self.rtt_list = []
         self.sent_times = {}
         self.lock = threading.Lock()
-        self.start_time = time.time()
+        self.start_time = time.perf_counter()
         self.running = True
 
         signal.signal(signal.SIGINT, self.signal_handler)
@@ -30,7 +30,7 @@ class PingClient:
         sys.exit(0)
 
     def print_statistics(self):
-        total_time = (time.time() - self.start_time) * 1000
+        total_time = (time.perf_counter() - self.start_time) * 1000
         print("\n--- ping statistics ---")
         loss = 100 * (1 - self.received_count / self.sent_count) if self.sent_count else 0
         print(f"{self.sent_count} packets transmitted, {self.received_count} received, "
@@ -51,7 +51,7 @@ class PingClient:
                 if len(data) == 8:
                     id_res, seq_res = struct.unpack('!4sI', data)
                     if id_res == b'RR01':
-                        current_time = time.time()
+                        current_time = time.perf_counter()
                         with self.lock:
                             send_info = self.sent_times.pop(seq_res, None)
 
@@ -60,12 +60,13 @@ class PingClient:
                             rtt = (current_time - send_time) * 1000
                             self.received_count += 1
                             self.rtt_list.append(rtt)
+
                             print(f"Response from {self.server_host}: seq={displayed_seq} time={rtt:.3f} ms")
             except (socket.timeout, BlockingIOError):
                 continue
 
     def cleanup(self):
-        current_time = time.time()
+        current_time = time.perf_counter()
         with self.lock:
             timed_out_seqs = [seq for seq, (_, displayed_seq, start_time) in self.sent_times.items()
                               if (current_time - start_time) * 1000 > 5000]
@@ -96,7 +97,7 @@ class PingClient:
                     displayed_seq = self.sent_count + 1
 
                     with self.lock:
-                        self.sent_times[sequence] = (time.time(), displayed_seq, time.time())
+                        self.sent_times[sequence] = (time.perf_counter(), displayed_seq, time.perf_counter())
 
                     data = struct.pack('!4sI6s', b'RP01', sequence, b'testme')
                     try:
