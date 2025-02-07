@@ -6,6 +6,7 @@ import time
 import random
 import threading
 
+
 def run_client(server_host, server_port):
     sequence = random.getrandbits(32)
     sent_times = {}
@@ -45,10 +46,11 @@ def run_client(server_host, server_port):
         except KeyboardInterrupt:
             print("\nClient stopped")
 
+
 if __name__ == '__main__':
     import sys
+
     if len(sys.argv) != 3:
-        print("Usage: python udp_client.py <server_ip> <server_port>")
+        print("Usage: python udp-ping-client.py <server_ip> <server_port>")
         sys.exit(1)
     run_client(sys.argv[1], int(sys.argv[2]))
-    

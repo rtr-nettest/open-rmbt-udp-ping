@@ -3,6 +3,7 @@
 import socket
 import struct
 
+
 def run_server():
     host = ''
     port = 8443
@@ -26,7 +27,6 @@ def run_server():
                 response = struct.pack('!4sI', b'RR01', seq)
                 sock.sendto(response, addr)
 
+
 if __name__ == '__main__':
     run_server()
-	
-	
