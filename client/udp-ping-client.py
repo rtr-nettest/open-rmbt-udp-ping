@@ -74,7 +74,12 @@ class PingClient:
                 print(f"No response from {self.server_host}: seq={displayed_seq}")
 
     def run(self):
-        addr_info = socket.getaddrinfo(self.server_host, self.server_port, socket.AF_UNSPEC, socket.SOCK_DGRAM)
+        try:
+            addr_info = socket.getaddrinfo(self.server_host, self.server_port, socket.AF_UNSPEC, socket.SOCK_DGRAM)
+        except socket.gaierror:
+            print(f"Error: Unable to resolve host {self.server_host}")
+            sys.exit(1)
+
         family = None
         for res in addr_info:
             if res[1] == socket.SOCK_DGRAM:
@@ -94,7 +99,10 @@ class PingClient:
                         self.sent_times[sequence] = (time.time(), displayed_seq, time.time())
 
                     data = struct.pack('!4sI6s', b'RP01', sequence, b'testme')
-                    sock.sendto(data, (self.server_host, self.server_port))
+                    try:
+                        sock.sendto(data, (self.server_host, self.server_port))
+                    except OSError as e:
+                        print(f"Error sending data: {e}")
                     self.sent_count += 1
 
                     self.cleanup()  # Check for timeouts
