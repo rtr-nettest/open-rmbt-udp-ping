@@ -116,7 +116,7 @@ if __name__ == '__main__':
             if not 1 <= server_port <= 65535:
                 raise ValueError
         except ValueError:
-            print("Invalid port number, using default 443")
+            print("Invalid port number, using default 444")
             server_port = 444
 
     client = PingClient(sys.argv[1], server_port)
