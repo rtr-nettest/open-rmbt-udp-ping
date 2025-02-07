@@ -64,6 +64,12 @@ class PingClient:
                             print(f"Response from {self.server_host}: seq={displayed_seq} time={rtt:.3f} ms")
             except (socket.timeout, BlockingIOError):
                 continue
+            except ConnectionResetError:
+                continue
+            except Exception:
+                continue
+
+
 
     def cleanup(self):
         current_time = time.perf_counter()
