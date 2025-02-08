@@ -1,0 +1,15 @@
+[package]
+name = "xdp-server"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0 OR MIT"
+
+[dependencies]
+libbpf-rs = { version = "0.21", features = ["async"] }
+tokio = { version = "1.28", features = ["full"] }
+anyhow = "1.0"
+num_cpus = "1.13"
+nix = "0.26"
+
+[build-dependencies]
+bindgen = "0.64"
