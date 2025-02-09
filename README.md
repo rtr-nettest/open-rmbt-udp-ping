@@ -1,5 +1,8 @@
 # UDP Ping Client/Server System
 
+
+*This code is not ready for production use*.
+
 A Python implementation of a UDP-based ping client and server with systemd integration.
 The default server UDP port is 444.
 
