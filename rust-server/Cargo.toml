@@ -1,0 +1,12 @@
+[package]
+name = "udp_server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+socket2 = { version = "0.5", features = ["all"] }
+libc = "0.2"
+num_cpus = "1.13"
+hmac = "0.12"
+sha2 = "0.10"
+clap = "2.33"
