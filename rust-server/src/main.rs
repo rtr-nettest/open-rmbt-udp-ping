@@ -177,7 +177,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             let len = unsafe { msgvec[i].assume_init().msg_len as usize };
             let buffer = &buffers[i][..len];
 
-            if len < 28 || &buffer[0..4] != b"RP01" {
+            if len < 32 || &buffer[0..4] != b"RP01" {
                 continue;
             }
 
@@ -196,28 +196,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 let packet_hash = &buffer[12..28];
                 let mut mac = HmacSha256::new_from_slice(seed).unwrap();
 
-                let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
-                println!("Source address v6: {}", src_addr.ip());
 
-
-                // TODO: The IP conversion code ugly and incomplete, but it does the job for now
-                // in the future the IP comparison shall be based on binary IPv6 addresses only.
-                // e.g. [::ffff:40.177.124.111] for an ipv4 address
-                
-                // Check for and extract IPv4 address from IPv6 address
-                let ipv4_str = if let _ipv6_addr = src_addr.ip() {
-                    match src_addr.ip().to_ipv4() {
-                        Some(ipv4_addr) => ipv4_addr.to_string(),
-                        None => format!("{}", src_addr.ip()), // If it's not an IPv4-mapped IPv6, keep as is
-                    }
-                } else {
-                    // If conversion function gives non-v6 address type, handle accordingly
-                    format!("{}", src_addr.ip())
-                };
-
-                // println!("Source address: {}", ipv4_str);
-
-                mac.update(ipv4_str.as_bytes());
                 mac.update(&packet_time.to_be_bytes());
 
                 if packet_hash != &mac.finalize().into_bytes()[..16] {
@@ -227,8 +206,58 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 println!("hmac matches");
             }
 
-            responses[i].copy_from_slice(&[b'R', b'R', b'0', b'1',
-                buffer[4], buffer[5], buffer[6], buffer[7]]);
+
+            let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
+            println!("Source address v6: {}", src_addr.ip());
+
+
+            // TODO: The IP conversion code ugly and incomplete, but it does the job for now
+            // in the future the IP comparison shall be based on binary IPv6 addresses only.
+            // e.g. [::ffff:40.177.124.111] for an ipv4 address
+
+            // Check for and extract IPv4 address from IPv6 address
+            let ipv4_str = if let _ipv6_addr = src_addr.ip() {
+                match src_addr.ip().to_ipv4() {
+                    Some(ipv4_addr) => ipv4_addr.to_string(),
+                    None => format!("{}", src_addr.ip()), // If it's not an IPv4-mapped IPv6, keep as is
+                }
+            } else {
+                // If conversion function gives non-v6 address type, handle accordingly
+                format!("{}", src_addr.ip())
+            };
+
+            println!("Source address: {}", ipv4_str);
+
+            let mut mac_ip = HmacSha256::new_from_slice(ipv4_str.as_bytes()).unwrap();
+
+            let mut ip_match = false;
+
+            if let Some(seed) = &seed {
+                let packet_ip_hash = &buffer[28..32];
+
+                println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
+
+                let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
+
+                println!("Own IP hash in hex: {}", hex::encode(mac_ip_hash));
+
+                if packet_ip_hash == mac_ip_hash {
+                    ip_match = true;
+                    println!("hmac_ip matches");
+                }
+                else {
+                    println!("hmac_ip mismatch");
+                }
+
+            }
+
+            if ip_match {
+                responses[i].copy_from_slice(&[b'R', b'R', b'0', b'1',
+                    buffer[4], buffer[5], buffer[6], buffer[7]]);
+            }
+            else { responses[i].copy_from_slice(&[b'R', b'E', b'0', b'1',
+                    buffer[4], buffer[5], buffer[6], buffer[7]]);
+            }
 
             msgs[send_count].write(mmsghdr {
                 msg_hdr: libc::msghdr {
@@ -271,6 +300,9 @@ fn setup_socket(port: u16) -> io::Result<Socket> {
 }
 
 fn pin_thread_to_cpu(cpu: usize) -> io::Result<()> {
+
+    //TODO: Add offset-option, thus not always pin to the first cpus...
+
     // Check if the CPU number provided is valid.
     // This should normally suit typical use, considering CPU maximization limits.
     if cpu >= num_cpus::get() {
