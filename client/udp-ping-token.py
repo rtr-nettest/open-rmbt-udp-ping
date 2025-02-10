@@ -135,7 +135,7 @@ class PingClient:
                     # print(f"Packet hash (hex): {packet_hash.hex()}")
                     # print(f"Packet hash full (hex): {mac.digest().hex()}")
 
-                    self.source_ip = "debug"
+                    # self.source_ip = "debug"
 
                     # Convert the string to bytes
                     source_ip_bytes = self.source_ip.encode('utf-8')
