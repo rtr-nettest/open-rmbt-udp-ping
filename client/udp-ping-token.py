@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import ipaddress
 import socket
 import struct
 import time
@@ -59,7 +60,7 @@ class PingClient:
                     # ! specifies network (big-endian) byte order.
                     # 4s specifies four bytes for the string.
                     # I specifies a 4-byte unsigned int for seq_res.
-                    id_res, seq_res= struct.unpack('!4sI', data)
+                    id_res, seq_res = struct.unpack('!4sI', data)
                     # print(f"parsed: id_res {id_res.hex()} seq {format(seq_res, 'x')}")
                     if id_res == b'RR01' or id_res == b'RE01':
                         current_time = time.perf_counter()
@@ -118,30 +119,33 @@ class PingClient:
 
                     # Get current time (32-bit Unix time, big-endian)
                     current_time = int(time.time()) & 0xFFFFFFFF
-                    time_bytes =  struct.pack(">I", current_time)
+                    time_bytes = struct.pack(">I", current_time)
                     time_bytes_for_hash = current_time.to_bytes(8, byteorder='big')
 
                     # Generate HMAC-SHA256 hash and truncate to 128 bits (16 bytes)
                     mac = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
-
-
 
                     # print(f"time_bytes {time_bytes.hex()}")
                     mac.update(time_bytes_for_hash)
                     packet_hash = mac.digest()[:8]  # Truncate to 64 bits
                     # print(f"Packet hash (hex): {packet_hash.hex()}")
                     # print(f"Packet hash full (hex): {mac.digest().hex()}")
+                    try:
+                        # Attempt to parse the input string as an IP address (either IPv4 or IPv6)
+                        ip_obj = ipaddress.ip_address(self.source_ip)
+                        if isinstance(ip_obj, ipaddress.IPv6Address):
+                            source_ip_u128 = int(ipaddress.IPv6Address(ip_obj))
+                        elif isinstance(ip_obj, ipaddress.IPv4Address):
+                            source_ip_u128 = int(ipaddress.IPv4Address(ip_obj)) + 0xffff00000000
+                        else:
+                            source_ip_u128 = 0x0
+                    except ValueError as e:
+                        # Catch and report invalid IP address strings
+                        print(f"Error: {e}")
 
-                    # self.source_ip = "debug"
+                    # print(f"Source IP hex: {source_ip_u128:032x}")
 
-                    # Convert the string to bytes
-                    source_ip_bytes = self.source_ip.encode('utf-8')
-
-                    # Convert bytes to hex representation and join them into a single string
-                    source_ip_hex = ''.join(f'{byte:02x}' for byte in source_ip_bytes)
-
-                    # print(f"source ip in hex {source_ip_hex}")
-                    mac_ip = hmac.new(self.source_ip.encode(), digestmod=hashlib.sha256)
+                    mac_ip = hmac.new(source_ip_u128.to_bytes(16, byteorder='big'), digestmod=hashlib.sha256)
                     mac_ip.update(time_bytes_for_hash)
                     packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
 
