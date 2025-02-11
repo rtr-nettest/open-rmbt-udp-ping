@@ -236,8 +236,10 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 let packet_ip_hash = &buffer[28..32];
 
                 println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
-
+                
+                mac_ip.update(&packet_time.to_be_bytes());
                 let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
+
 
                 println!("Own IP hash in hex: {}", hex::encode(mac_ip_hash));
 
