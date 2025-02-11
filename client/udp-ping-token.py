@@ -56,12 +56,9 @@ class PingClient:
                 # print(f"data (len={len(data)}) {data} or hex {data.hex()}")
                 if len(data) == 8:
 
-                    # data = struct.pack('!4sIB', b'MSG!', 1234567890, 1)
-
                     # ! specifies network (big-endian) byte order.
                     # 4s specifies four bytes for the string.
                     # I specifies a 4-byte unsigned int for seq_res.
-                    # B specifies a 1-byte unsigned char for status.
                     id_res, seq_res= struct.unpack('!4sI', data)
                     # print(f"parsed: id_res {id_res.hex()} seq {format(seq_res, 'x')}")
                     if id_res == b'RR01' or id_res == b'RE01':
@@ -131,7 +128,7 @@ class PingClient:
 
                     # print(f"time_bytes {time_bytes.hex()}")
                     mac.update(time_bytes_for_hash)
-                    packet_hash = mac.digest()[:16]  # Truncate to 128 bits
+                    packet_hash = mac.digest()[:8]  # Truncate to 64 bits
                     # print(f"Packet hash (hex): {packet_hash.hex()}")
                     # print(f"Packet hash full (hex): {mac.digest().hex()}")
 
@@ -149,7 +146,14 @@ class PingClient:
                     packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
 
                     # Construct the packet
-                    data = struct.pack('!4sI4s16s4s', b'RP01', sequence, time_bytes, packet_hash, packet_ip_hash)
+                    # ! specifies network (big-endian) byte order.
+                    # 4s specifies four bytes for the string.
+                    # I specifies a 4-byte unsigned int for seq_res.
+                    # B specifies a 1-byte unsigned char for status.
+                    # 4s specifies four bytes for time_bytes (aka time)
+                    # 8s specifies 8 bytes for packet_hash
+                    # 4s specifies 4 bytes for packet_ip_hash
+                    data = struct.pack('!4sI4s8s4s', b'RP01', sequence, time_bytes, packet_hash, packet_ip_hash)
                     # print(f"Sending {len(data)}")
 
                     try:
