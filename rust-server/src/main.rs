@@ -176,8 +176,9 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
         for i in 0..received as usize {
             let len = unsafe { msgvec[i].assume_init().msg_len as usize };
             let buffer = &buffers[i][..len];
+            println!("len {}",len);
 
-            if len < 32 || &buffer[0..4] != b"RP01" {
+            if len != 24 || &buffer[0..4] != b"RP01" {
                 continue;
             }
 
@@ -193,13 +194,13 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             }
 
             if let Some(seed) = &seed {
-                let packet_hash = &buffer[12..28];
+                let packet_hash = &buffer[12..20];
                 let mut mac = HmacSha256::new_from_slice(seed).unwrap();
 
 
                 mac.update(&packet_time.to_be_bytes());
 
-                if packet_hash != &mac.finalize().into_bytes()[..16] {
+                if packet_hash != &mac.finalize().into_bytes()[..8] {
                     println!("hmac mismatch");
                     continue;
                 }
@@ -233,7 +234,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             let mut ip_match = false;
 
             if let Some(seed) = &seed {
-                let packet_ip_hash = &buffer[28..32];
+                let packet_ip_hash = &buffer[20..24];
 
                 println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
                 
