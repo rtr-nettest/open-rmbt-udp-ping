@@ -97,30 +97,6 @@ fn sockaddr_in6_to_socketaddr_v6(addr: &sockaddr_in6) -> SocketAddrV6 {
     SocketAddrV6::new(ipv6_addr, port, addr.sin6_flowinfo, addr.sin6_scope_id)
 }
 
-fn sockaddr_in6_to_ipv4_string(addr: &sockaddr_in6) -> Option<String> {
-    // Extract the IPv6 address components
-    let ip_bytes = &addr.sin6_addr.s6_addr;
-    let segments = [
-        u16::from_be_bytes([ip_bytes[0], ip_bytes[1]]),
-        u16::from_be_bytes([ip_bytes[2], ip_bytes[3]]),
-        u16::from_be_bytes([ip_bytes[4], ip_bytes[5]]),
-        u16::from_be_bytes([ip_bytes[6], ip_bytes[7]]),
-        u16::from_be_bytes([ip_bytes[8], ip_bytes[9]]),
-        u16::from_be_bytes([ip_bytes[10], ip_bytes[11]]),
-        u16::from_be_bytes([ip_bytes[12], ip_bytes[13]]),
-        u16::from_be_bytes([ip_bytes[14], ip_bytes[15]]),
-    ];
-
-    // Create an `Ipv6Addr` using the extracted segments
-    let ipv6_addr = Ipv6Addr::from(segments);
-
-    // Check if the IPv6 address is an IPv4-mapped address
-    if let Some(ipv4_addr) = ipv6_addr.to_ipv4() {
-        Some(ipv4_addr.to_string())
-    } else {
-        None
-    }
-}
 
 fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
     let socket = setup_socket(port)?;
@@ -209,31 +185,17 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
 
 
             let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
-            println!("Source address v6: {}", src_addr.ip());
 
+            let src_addr_u128 = src_addr.ip().to_bits();
+            
+            println!("Source address v6: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
+            
 
-            // TODO: The IP conversion code ugly and incomplete, but it does the job for now
-            // in the future the IP comparison shall be based on binary IPv6 addresses only.
-            // e.g. [::ffff:40.177.124.111] for an ipv4 address
-
-            // Check for and extract IPv4 address from IPv6 address
-            let ipv4_str = if let _ipv6_addr = src_addr.ip() {
-                match src_addr.ip().to_ipv4() {
-                    Some(ipv4_addr) => ipv4_addr.to_string(),
-                    None => format!("{}", src_addr.ip()), // If it's not an IPv4-mapped IPv6, keep as is
-                }
-            } else {
-                // If conversion function gives non-v6 address type, handle accordingly
-                format!("{}", src_addr.ip())
-            };
-
-            println!("Source address: {}", ipv4_str);
-
-            let mut mac_ip = HmacSha256::new_from_slice(ipv4_str.as_bytes()).unwrap();
+            let mut mac_ip = HmacSha256::new_from_slice(&src_addr_u128.to_be_bytes()).unwrap();
 
             let mut ip_match = false;
 
-            if let Some(seed) = &seed {
+            if let Some(_seed) = &seed {
                 let packet_ip_hash = &buffer[20..24];
 
                 println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
