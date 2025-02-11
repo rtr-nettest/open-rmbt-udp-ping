@@ -7,11 +7,11 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use socket2::{Domain, Protocol, Socket, Type};
-use libc::{recvmmsg, sendmmsg, mmsghdr, iovec, sockaddr_in6, ntohs, cpu_set_t, CPU_ZERO, CPU_SET, sched_setaffinity};
+use libc::{recvmmsg, sendmmsg, mmsghdr, iovec, sockaddr_in6, ntohs};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use clap::{Arg, App};
-use num_cpus;
+use core_affinity::{CoreId, get_core_ids};
 
 const BATCH_SIZE: usize = 64;
 const BUFFER_SIZE: usize = 1024;
@@ -36,7 +36,7 @@ fn main() {
                 .short("c")
                 .long("cpus")
                 .value_name("CPUS")
-                .help("Number of CPUs to use (default: all available)")
+                .help("CPU cores to use (e.g. 5-8 or 5,6,7,8)")
                 .takes_value(true),
         )
         .get_matches();
@@ -44,31 +44,39 @@ fn main() {
     let seed = matches.value_of("seed").map(|s| s.as_bytes().to_vec());
     let port = 444;
 
-    // Determine number of CPUs to use
-    let total_cpus = num_cpus::get();
-    let cpus_to_use = matches
-        .value_of("cpus")
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(total_cpus)
-        .min(total_cpus);
+    // Parse CPU list
+    let cores = parse_cpu_list(matches.value_of("cpus")).unwrap_or_else(|| {
+        get_core_ids().unwrap_or_else(|| {
+            eprintln!("Failed to get core IDs");
+            std::process::exit(1);
+        })
+    });
 
-    println!("Using {} of {} available CPUs", cpus_to_use, total_cpus);
+    if cores.is_empty() {
+        eprintln!("No valid CPU cores specified or detected");
+        std::process::exit(1);
+    }
+
+    println!("Using CPU cores: {:?}", cores.iter().map(|c| c.id).collect::<Vec<_>>());
 
     let seed = Arc::new(seed);
 
     // Spawn worker threads
-    for cpu in 0..cpus_to_use {
+    for (idx, core_id) in cores.iter().enumerate() {
         let seed = seed.clone();
+        let core = *core_id;
         thread::spawn(move || {
-            // Pin thread to specific CPU
-            if let Err(e) = pin_thread_to_cpu(cpu) {
-                eprintln!("Failed to pin thread to CPU {}: {}", cpu, e);
+            // Pin thread to specific core
+            if core_affinity::set_for_current(core) {
+                println!("Worker {} pinned to CPU {}", idx, core.id);
+            } else {
+                eprintln!("Failed to pin worker {} to CPU {}", idx, core.id);
             }
             worker_thread(port, seed.as_ref().clone()).expect("Worker thread failed");
         });
     }
 
-    println!("Server running on port {} ({} threads)", port, cpus_to_use);
+    println!("Server running on port {} ({} threads)", port, cores.len());
     thread::park()
 }
 
@@ -187,9 +195,9 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
 
             let src_addr_u128 = src_addr.ip().to_bits();
-            
+
             println!("Source address v6: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
-            
+
 
             let mut mac_ip = HmacSha256::new_from_slice(&src_addr_u128.to_be_bytes()).unwrap();
 
@@ -199,7 +207,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 let packet_ip_hash = &buffer[20..24];
 
                 println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
-                
+
                 mac_ip.update(&packet_time.to_be_bytes());
                 let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
 
@@ -264,37 +272,31 @@ fn setup_socket(port: u16) -> io::Result<Socket> {
     Ok(socket)
 }
 
-fn pin_thread_to_cpu(cpu: usize) -> io::Result<()> {
+    fn parse_cpu_list(cpu_str: Option<&str>) -> Option<Vec<CoreId>> {
+        let all_cores = get_core_ids()?;
+        let cpu_str = cpu_str?;
 
-    //TODO: Add offset-option, thus not always pin to the first cpus...
+        let mut cores = Vec::new();
+        for part in cpu_str.split(',') {
+            if let Some((start_str, end_str)) = part.split_once('-') {
+                let start = start_str.parse::<usize>().ok()?;
+                let end = end_str.parse::<usize>().ok()?;
+                for id in start..=end {
+                    if let Some(core) = all_cores.iter().find(|c| c.id == id) {
+                        cores.push(*core);
+                    }
+                }
+            } else {
+                let id = part.parse::<usize>().ok()?;
+                if let Some(core) = all_cores.iter().find(|c| c.id == id) {
+                    cores.push(*core);
+                }
+            }
+        }
 
-    // Check if the CPU number provided is valid.
-    // This should normally suit typical use, considering CPU maximization limits.
-    if cpu >= num_cpus::get() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!("CPU {} exceeds available CPU count {:?}", cpu, num_cpus::get()),
-        ));
+        cores.sort();
+        cores.dedup();
+        Some(cores)
     }
-
-    // Get the current thread ID
-    let tid = unsafe { libc::syscall(libc::SYS_gettid) as libc::pid_t };
-
-    // Constructing the cpu_set for desired CPU
-    let mut cpuset: cpu_set_t = unsafe { std::mem::zeroed() };
-
-    // Zero out the CPU set
-    unsafe { CPU_ZERO(&mut cpuset) };
-
-    // Add the target CPU to our set
-    unsafe { CPU_SET(cpu, &mut cpuset) };
-
-    // Attempt to set CPU affinity for the current thread
-    let result = unsafe { sched_setaffinity(tid, std::mem::size_of::<cpu_set_t>(), &cpuset) };
-
-    if result != 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok(())
-}
+    
+    
