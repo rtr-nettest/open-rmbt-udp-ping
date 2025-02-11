@@ -145,6 +145,7 @@ class PingClient:
 
                     # print(f"source ip in hex {source_ip_hex}")
                     mac_ip = hmac.new(self.source_ip.encode(), digestmod=hashlib.sha256)
+                    mac_ip.update(time_bytes_for_hash)
                     packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
 
                     # Construct the packet
