@@ -39,14 +39,28 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
+    -d, --debug      Enable debug logging
     -c, --cpus <CPUS>    CPU cores to use (e.g. 5-8 or 5,6,7,8)
     -s, --seed <SEED>    Sets the HMAC-SHA256 seed
+    -
 ```
 
 ```bash
 cd rust-server
 cargo build --release 
 target/release/udp_server -c 0-1 -s topsecret
+```
+
+```
+### Sample debug output
+[2025-02-12T08:18:59Z DEBUG udp_server] Received (len=24): 5250303149e8964b67ac5975c44138a21867e72c07f4136c
+[2025-02-12T08:18:59Z DEBUG udp_server] HMAC packet: c44138a21867e72c
+[2025-02-12T08:18:59Z DEBUG udp_server] HMAC packet matches
+[2025-02-12T08:18:59Z DEBUG udp_server] Source address: ::ffff:62.1.2.3 in hex 00000000000000000000ffff3e010203
+[2025-02-12T08:18:59Z DEBUG udp_server] HMAC IP: 07f4136c
+[2025-02-12T08:18:59Z DEBUG udp_server] Own HMAC IP: 07f4136c
+[2025-02-12T08:18:59Z DEBUG udp_server] HMAC IP matches
+[2025-02-12T08:18:59Z DEBUG udp_server] Sending response: 5252303149e8964b
 ```
 
 ## Client
@@ -64,7 +78,7 @@ from the RMBTControlServer
 python3 client/udp_ping_token.py --host udp.example.com --port 444 --seed topsecret  --ip 1.2.3.4
 ```
 
-Sample output
+### Sample client output
 ```
 [...]
 Response from udp.example.com: seq=11 time=9.960 ms
