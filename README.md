@@ -3,13 +3,18 @@
 
 *This code is not ready for production use*.
 
-A Python implementation of a UDP-based ping client and server with systemd integration.
+A Rust implementation of a UDP-based Ping server with a Python client implementation.
 The default server UDP port is 444.
 
-## Features
+## Server Features
+- Batch processing
+- Multi-Threaded
+- Supports CPU-pinning
+- Authentication using sha256 HMAC
+
+## Client Features
 - Client with precise timing
-- Server with validation and logging
-- Systemd service integration
+- Authentication using sha256 HMAC
 
 ## Installation
 
@@ -21,23 +26,56 @@ git clone https://github.com/rtr-nettest/open-rmbt-udp-ping.git
 cd /open-rmbt-udp-ping
 ```
 
-2. Server deployment with systemd:
+## Rust server
 
-```bash
-useradd udp_ping
-cp systemd/open-rmbt-udp-ping.service /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable open-rmbt-udp-ping 
-systemctl start open-rmbt-udp-ping
+```
+UDP Ping Server 0.1.0
+
+USAGE:
+    udp_server [OPTIONS]
+
+FLAGS:
+    -h, --help       Prints help information
+    -V, --version    Prints version information
+
+OPTIONS:
+    -c, --cpus <CPUS>    CPU cores to use (e.g. 5-8 or 5,6,7,8)
+    -s, --seed <SEED>    Sets the HMAC-SHA256 seed
 ```
 
+```bash
+cd rust-server
+cargo build --release
+target/release/udp_server -c 0-1 -s topsecret
+```
 
 ## Client
+```
+udp-ping-token.py [-h] [--host HOST] [--port PORT] --seed SEED --ip IP
+```
+IP is the IP of the client (source address to the server)
+
+Normally the SEED (shared secret) is set in the RMBTControlServer and the same seed is configured
+on the UDP server. To make this client independent of the ecosystem, it also includes the token generation,
+thus IP and SEED need to be specified. In normal operation, the client would just forward the token received
+from the RMBTControlServer
+
 ```bash
-python3 client/udp_ping_client.py <server_ip> <server_port>
+python3 client/udp_ping_token.py --host udp.example.com --port 444 --seed topsecret  --ip 1.2.3.4
 ```
 
-## Monitoring
-```bash
-journalctl -f -u open-rmbt-udp-ping --lines=200
+Sample output
 ```
+[...]
+Response from udp.example.com: seq=11 time=9.960 ms
+Response from udp.example.com: seq=12 time=10.548 ms
+
+--- ping statistics ---
+12 packets transmitted, 12 received, 0.0% packet loss, time 11079ms
+rtt min/avg/max/mdev = 8.074/10.919/16.419/2.133 ms
+```
+
+
+
+
+
