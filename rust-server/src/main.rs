@@ -72,7 +72,7 @@ fn main() {
     });
 
     if cores.is_empty() {
-        info!("Using CPU cores: {:?}", cores.iter().map(|c| c.id).collect::<Vec<_>>());
+        error!("No valid CPU cores specified or detected");
         std::process::exit(1);
     }
 
@@ -134,7 +134,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
     let mut addr_storage: [sockaddr_in6; BATCH_SIZE] = unsafe { std::mem::zeroed() };
     let mut msgs = [MaybeUninit::<mmsghdr>::zeroed(); BATCH_SIZE];
     let mut iovecs = [MaybeUninit::<iovec>::zeroed(); BATCH_SIZE];
-    let mut send_iovecs = [MaybeUninit::<iovec>::zeroed(); BATCH_SIZE]; // Add this line
+    let mut send_iovecs = [MaybeUninit::<iovec>::zeroed(); BATCH_SIZE]; 
 
     // Initialize static iovec structures for receiving
     for i in 0..BATCH_SIZE {
@@ -207,7 +207,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 let packet_hash = &buffer[12..20];
                 let mut mac = HmacSha256::new_from_slice(seed).unwrap();
                 mac.update(&packet_time.to_be_bytes());
-                debug!("HMAC packet: {}", hex::encode(packet_hash));                
+                debug!("HMAC packet: {}", hex::encode(packet_hash));
 
                 if packet_hash != &mac.finalize().into_bytes()[..8] {
                     debug!("HMAC packet mismatch");
@@ -215,7 +215,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 }
                 debug!("HMAC packet matches");
             }
-            
+
             let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
             let src_addr_u128 = src_addr.ip().to_bits();
             debug!("Source address: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
@@ -250,7 +250,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                     buffer[4], buffer[5], buffer[6], buffer[7]]);
             }
             debug!("Sending response: {}", hex::encode(responses[i]));
-            
+
             // Use the pre-initialized send_iovecs[i] instead of a temporary iovec
             msgs[send_count].write(mmsghdr {
                 msg_hdr: libc::msghdr {
@@ -288,32 +288,31 @@ fn setup_socket(port: u16) -> io::Result<Socket> {
     socket.bind(&format!("[::]:{}", port).parse::<SocketAddr>().unwrap().into())?;
     Ok(socket)
 }
+fn parse_cpu_list(cpu_str: Option<&str>) -> Option<Vec<CoreId>> {
+    let all_cores = get_core_ids()?;
+    let cpu_str = cpu_str?;
 
-    fn parse_cpu_list(cpu_str: Option<&str>) -> Option<Vec<CoreId>> {
-        let all_cores = get_core_ids()?;
-        let cpu_str = cpu_str?;
-
-        let mut cores = Vec::new();
-        for part in cpu_str.split(',') {
-            if let Some((start_str, end_str)) = part.split_once('-') {
-                let start = start_str.parse::<usize>().ok()?;
-                let end = end_str.parse::<usize>().ok()?;
-                for id in start..=end {
-                    if let Some(core) = all_cores.iter().find(|c| c.id == id) {
-                        cores.push(*core);
-                    }
-                }
-            } else {
-                let id = part.parse::<usize>().ok()?;
+    let mut cores = Vec::new();
+    for part in cpu_str.split(',') {
+        if let Some((start_str, end_str)) = part.split_once('-') {
+            let start = start_str.parse::<usize>().ok()?;
+            let end = end_str.parse::<usize>().ok()?;
+            for id in start..=end {
                 if let Some(core) = all_cores.iter().find(|c| c.id == id) {
                     cores.push(*core);
                 }
             }
+        } else {
+            let id = part.parse::<usize>().ok()?;
+            if let Some(core) = all_cores.iter().find(|c| c.id == id) {
+                cores.push(*core);
+            }
         }
-
-        cores.sort();
-        cores.dedup();
-        Some(cores)
     }
-    
-    
+
+    cores.sort();
+    cores.dedup();
+    Some(cores)
+}
+
+
