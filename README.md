@@ -50,6 +50,11 @@ cd rust-server
 cargo build --release 
 target/release/udp_server -c 0-1 -s topsecret
 ```
+Format:
+- Request: as '!4sI4s8s4s' using: 'RP01', sequence, time_bytes, packet_hash, packet_ip_hash
+- Response: as '!4sI' using: 'RR01', sequence
+- IP error response: as '!4sI' using: 'RE01', sequence
+
 
 ```
 ### Sample debug output
