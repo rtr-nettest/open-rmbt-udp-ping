@@ -12,6 +12,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use clap::{Arg, App};
 use core_affinity::{CoreId, get_core_ids};
+use log::{debug, error, info};
 
 const BATCH_SIZE: usize = 64;
 const BUFFER_SIZE: usize = 1024;
@@ -39,7 +40,25 @@ fn main() {
                 .help("CPU cores to use (e.g. 5-8 or 5,6,7,8)")
                 .takes_value(true),
         )
+        .arg(
+            Arg::with_name("debug")
+                .short("d")
+                .long("debug")
+                .help("Enable debug logging"),
+        )
         .get_matches();
+
+    // Initialize logging
+    if matches.is_present("debug") {
+        env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Debug)
+            .init();
+        debug!("Debug logging enabled");
+    } else {
+        env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Info)
+            .init();
+    }
 
     let seed = matches.value_of("seed").map(|s| s.as_bytes().to_vec());
     let port = 444;
@@ -47,17 +66,17 @@ fn main() {
     // Parse CPU list
     let cores = parse_cpu_list(matches.value_of("cpus")).unwrap_or_else(|| {
         get_core_ids().unwrap_or_else(|| {
-            eprintln!("Failed to get core IDs");
+            error!("Failed to get core IDs");
             std::process::exit(1);
         })
     });
 
     if cores.is_empty() {
-        eprintln!("No valid CPU cores specified or detected");
+        info!("Using CPU cores: {:?}", cores.iter().map(|c| c.id).collect::<Vec<_>>());
         std::process::exit(1);
     }
 
-    println!("Using CPU cores: {:?}", cores.iter().map(|c| c.id).collect::<Vec<_>>());
+    info!("Using CPU cores: {:?}", cores.iter().map(|c| c.id).collect::<Vec<_>>());
 
     let seed = Arc::new(seed);
 
@@ -68,15 +87,15 @@ fn main() {
         thread::spawn(move || {
             // Pin thread to specific core
             if core_affinity::set_for_current(core) {
-                println!("Worker {} pinned to CPU {}", idx, core.id);
+                debug!("Worker {} pinned to CPU {}", idx, core.id);
             } else {
-                eprintln!("Failed to pin worker {} to CPU {}", idx, core.id);
+                error!("Failed to pin worker {} to CPU {}", idx, core.id);
             }
             worker_thread(port, seed.as_ref().clone()).expect("Worker thread failed");
         });
     }
 
-    println!("Server running on port {} ({} threads)", port, cores.len());
+    info!("Server running on port {} ({} threads)", port, cores.len());
     thread::park()
 }
 
@@ -166,7 +185,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
         for i in 0..received as usize {
             let len = unsafe { msgvec[i].assume_init().msg_len as usize };
             let buffer = &buffers[i][..len];
-            println!("len {}", len);
+            debug!("Received (len={}): {}", len, hex::encode(buffer));
 
             if len != 24 || &buffer[0..4] != b"RP01" {
                 continue;
@@ -180,30 +199,26 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
 
             if packet_time > current_time + MAX_TIME_DIFF_EARLY ||
                 packet_time < current_time - MAX_TIME_DIFF_LATE {
+                debug!("Packet time out of range");
                 continue;
             }
 
             if let Some(seed) = &seed {
                 let packet_hash = &buffer[12..20];
                 let mut mac = HmacSha256::new_from_slice(seed).unwrap();
-
-
                 mac.update(&packet_time.to_be_bytes());
+                debug!("HMAC packet: {}", hex::encode(packet_hash));                
 
                 if packet_hash != &mac.finalize().into_bytes()[..8] {
-                    println!("hmac mismatch");
+                    debug!("HMAC packet mismatch");
                     continue;
                 }
-                println!("hmac matches");
+                debug!("HMAC packet matches");
             }
-
-
+            
             let src_addr = sockaddr_in6_to_socketaddr_v6(&addr_storage[i]);
-
             let src_addr_u128 = src_addr.ip().to_bits();
-
-            println!("Source address v6: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
-
+            debug!("Source address: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
 
             let mut mac_ip = HmacSha256::new_from_slice(&src_addr_u128.to_be_bytes()).unwrap();
 
@@ -211,30 +226,31 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
 
             if let Some(_seed) = &seed {
                 let packet_ip_hash = &buffer[20..24];
-
-                println!("Packet IP hash in hex: {}", hex::encode(packet_ip_hash));
+                debug!("HMAC IP: {}", hex::encode(packet_ip_hash));
 
                 mac_ip.update(&packet_time.to_be_bytes());
                 let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
+                debug!("Own HMAC IP: {}", hex::encode(mac_ip_hash));
 
-
-                println!("Own IP hash in hex: {}", hex::encode(mac_ip_hash));
 
                 if packet_ip_hash == mac_ip_hash {
                     ip_match = true;
-                    println!("hmac_ip matches");
+                    debug!("HMAC IP matches");
                 } else {
-                    println!("hmac_ip mismatch");
+                    debug!("HMAC IP mismatch");
                 }
             }
 
             if ip_match {
+
                 responses[i].copy_from_slice(&[b'R', b'R', b'0', b'1',
                     buffer[4], buffer[5], buffer[6], buffer[7]]);
             } else {
                 responses[i].copy_from_slice(&[b'R', b'E', b'0', b'1',
                     buffer[4], buffer[5], buffer[6], buffer[7]]);
             }
+            debug!("Sending response: {}", hex::encode(responses[i]));
+            
             // Use the pre-initialized send_iovecs[i] instead of a temporary iovec
             msgs[send_count].write(mmsghdr {
                 msg_hdr: libc::msghdr {
