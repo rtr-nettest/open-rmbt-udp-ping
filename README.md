@@ -45,8 +45,7 @@ OPTIONS:
 
 ```bash
 cd rust-server
-cargo build 
-# Note --release currently fails, to be debugged
+cargo build --release 
 target/release/udp_server -c 0-1 -s topsecret
 ```
 

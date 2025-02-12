@@ -115,12 +115,18 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
     let mut addr_storage: [sockaddr_in6; BATCH_SIZE] = unsafe { std::mem::zeroed() };
     let mut msgs = [MaybeUninit::<mmsghdr>::zeroed(); BATCH_SIZE];
     let mut iovecs = [MaybeUninit::<iovec>::zeroed(); BATCH_SIZE];
+    let mut send_iovecs = [MaybeUninit::<iovec>::zeroed(); BATCH_SIZE]; // Add this line
 
-    // Initialize static iovec structures
+    // Initialize static iovec structures for receiving
     for i in 0..BATCH_SIZE {
         iovecs[i].write(iovec {
             iov_base: buffers[i].as_mut_ptr() as *mut _,
             iov_len: BUFFER_SIZE,
+        });
+        // Initialize send_iovecs
+        send_iovecs[i].write(iovec {
+            iov_base: responses[i].as_mut_ptr() as *mut _,
+            iov_len: 8,
         });
     }
 
@@ -160,7 +166,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
         for i in 0..received as usize {
             let len = unsafe { msgvec[i].assume_init().msg_len as usize };
             let buffer = &buffers[i][..len];
-            println!("len {}",len);
+            println!("len {}", len);
 
             if len != 24 || &buffer[0..4] != b"RP01" {
                 continue;
@@ -217,29 +223,24 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 if packet_ip_hash == mac_ip_hash {
                     ip_match = true;
                     println!("hmac_ip matches");
-                }
-                else {
+                } else {
                     println!("hmac_ip mismatch");
                 }
-
             }
 
             if ip_match {
                 responses[i].copy_from_slice(&[b'R', b'R', b'0', b'1',
                     buffer[4], buffer[5], buffer[6], buffer[7]]);
-            }
-            else { responses[i].copy_from_slice(&[b'R', b'E', b'0', b'1',
+            } else {
+                responses[i].copy_from_slice(&[b'R', b'E', b'0', b'1',
                     buffer[4], buffer[5], buffer[6], buffer[7]]);
             }
-
+            // Use the pre-initialized send_iovecs[i] instead of a temporary iovec
             msgs[send_count].write(mmsghdr {
                 msg_hdr: libc::msghdr {
                     msg_name: &addr_storage[i] as *const _ as *mut _,
                     msg_namelen: size_of::<sockaddr_in6>() as u32,
-                    msg_iov: &iovec {
-                        iov_base: responses[i].as_ptr() as *mut _,
-                        iov_len: 8,
-                    } as *const _ as *mut _,
+                    msg_iov: send_iovecs[i].as_ptr() as *mut _,
                     msg_iovlen: 1,
                     msg_control: std::ptr::null_mut(),
                     msg_controllen: 0,
