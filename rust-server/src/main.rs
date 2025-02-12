@@ -16,8 +16,8 @@ use log::{debug, error, info};
 
 const BATCH_SIZE: usize = 64;
 const BUFFER_SIZE: usize = 1024;
-const MAX_TIME_DIFF_EARLY: u64 = 10;
-const MAX_TIME_DIFF_LATE: u64 = 4 * 60 * 60;
+const MAX_TIME_DIFF_EARLY: u64 = 30; // 30 s
+const MAX_TIME_DIFF_LATE: u64 = 4 * 60 * 60; // 4h
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -192,16 +192,24 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             }
 
             let packet_time = u32::from_be_bytes(buffer[8..12].try_into().unwrap()) as u64;
-            let current_time = SystemTime::now()
+            let current_time_duration = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
+                .unwrap();
 
-            if packet_time > current_time + MAX_TIME_DIFF_EARLY ||
-                packet_time < current_time - MAX_TIME_DIFF_LATE {
-                debug!("Packet time out of range");
+            let time_difference = (current_time_duration.as_secs_f64()) - (packet_time as f64);
+            debug!("Time difference: {:.6} s", time_difference);
+
+            let current_time = current_time_duration.as_secs();    
+
+            if packet_time + MAX_TIME_DIFF_EARLY < current_time {
+                debug!("Packet too early");
                 continue;
             }
+            if packet_time  > current_time + MAX_TIME_DIFF_LATE {
+                debug!("Packet too late");
+                continue;
+            }
+
 
             if let Some(seed) = &seed {
                 let packet_hash = &buffer[12..20];
