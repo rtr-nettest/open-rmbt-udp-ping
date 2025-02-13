@@ -11,6 +11,7 @@ The default server UDP port is 444.
 - Multi-Threaded
 - Supports CPU-pinning
 - Authentication using sha256 HMAC
+- Linux only (not portable to osX or Windows)
 
 ## Client Features
 - Client with precise timing
@@ -47,6 +48,13 @@ OPTIONS:
 
 ```bash
 cd rust-server
+
+# get rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# get build-essential
+apt -y install build-essential
+
 cargo build --release 
 target/release/udp_server -c 0-1 -s topsecret
 ```
