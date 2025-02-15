@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import base64
 import ipaddress
 import socket
 import struct
@@ -158,7 +159,17 @@ class PingClient:
                     # 8s specifies 8 bytes for packet_hash
                     # 4s specifies 4 bytes for packet_ip_hash
                     data = struct.pack('!4sI4s8s4s', b'RP01', sequence, time_bytes, packet_hash, packet_ip_hash)
-                    # print(f"Sending {len(data)}")
+
+                    debug_token = False
+
+                    if debug_token:
+                        # Add your token here to debug some token
+                        base64_token = 'Z7DPmUpCi1Du3a/EAp+Bew=='
+                        mytoken = base64.b64decode(base64_token)
+                        # print(f"Original token (in hex): {data.hex()}")
+                        data = struct.pack('!4sI16s', b'RP01', sequence, mytoken)
+
+
 
                     try:
                         sock.sendto(data, (self.server_host, self.server_port))
@@ -175,7 +186,7 @@ class PingClient:
 
 if __name__ == '__main__':
     parser = ArgumentParser(description="UDP Ping Client with HMAC-SHA256 validation")
-    parser.add_argument("--host", help="Hostname of server")
+    parser.add_argument("--host", required=True, help="Hostname of server")
     parser.add_argument("--port", type=int, default=444, help="Server port (default: 444)")
     parser.add_argument("--seed", required=True, help="Seed")
     parser.add_argument("--ip", required=True, help="Source IP for HMAC calculation")
