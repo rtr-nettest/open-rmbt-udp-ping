@@ -199,14 +199,14 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             let time_difference = (current_time_duration.as_secs_f64()) - (packet_time as f64);
             debug!("Time difference: {:.6} s", time_difference);
 
-            let current_time = current_time_duration.as_secs();    
+            let current_time = current_time_duration.as_secs();
 
-            if packet_time + MAX_TIME_DIFF_EARLY < current_time {
-                debug!("Packet too early");
+            if packet_time + MAX_TIME_DIFF_LATE < current_time {
+                debug!("Packet too late");
                 continue;
             }
-            if packet_time  > current_time + MAX_TIME_DIFF_LATE {
-                debug!("Packet too late");
+            if packet_time  > current_time + MAX_TIME_DIFF_EARLY {
+                debug!("Packet too early");
                 continue;
             }
 
