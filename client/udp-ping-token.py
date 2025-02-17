@@ -121,7 +121,7 @@ class PingClient:
                     # Get current time (32-bit Unix time, big-endian)
                     current_time = int(time.time()) & 0xFFFFFFFF
                     time_bytes = struct.pack(">I", current_time)
-                    time_bytes_for_hash = current_time.to_bytes(8, byteorder='big')
+                    time_bytes_for_hash = current_time.to_bytes(4, byteorder='big')
 
                     # Generate HMAC-SHA256 hash and truncate to 128 bits (16 bytes)
                     mac = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
