@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 import base64
+import binascii
 import ipaddress
 import socket
 import struct
@@ -118,56 +119,62 @@ class PingClient:
                     with self.lock:
                         self.sent_times[sequence] = (time.perf_counter(), displayed_seq, time.perf_counter())
 
-                    # Get current time (32-bit Unix time, big-endian)
-                    current_time = int(time.time()) & 0xFFFFFFFF
-                    time_bytes = struct.pack(">I", current_time)
-                    time_bytes_for_hash = current_time.to_bytes(4, byteorder='big')
 
-                    # Generate HMAC-SHA256 hash and truncate to 128 bits (16 bytes)
-                    mac = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
+                    if not args.token:
 
-                    # print(f"time_bytes {time_bytes.hex()}")
-                    mac.update(time_bytes_for_hash)
-                    packet_hash = mac.digest()[:8]  # Truncate to 64 bits
-                    # print(f"Packet hash (hex): {packet_hash.hex()}")
-                    # print(f"Packet hash full (hex): {mac.digest().hex()}")
-                    try:
-                        # Attempt to parse the input string as an IP address (either IPv4 or IPv6)
-                        ip_obj = ipaddress.ip_address(self.source_ip)
-                        if isinstance(ip_obj, ipaddress.IPv6Address):
-                            source_ip_u128 = int(ipaddress.IPv6Address(ip_obj))
-                        elif isinstance(ip_obj, ipaddress.IPv4Address):
-                            source_ip_u128 = int(ipaddress.IPv4Address(ip_obj)) + 0xffff00000000
-                        else:
-                            source_ip_u128 = 0x0
-                    except ValueError as e:
-                        # Catch and report invalid IP address strings
-                        print(f"Error: {e}")
+                        # Get current time (32-bit Unix time, big-endian)
+                        current_time = int(time.time()) & 0xFFFFFFFF
+                        time_bytes = struct.pack(">I", current_time)
+                        time_bytes_for_hash = current_time.to_bytes(8, byteorder='big')
 
-                    # print(f"Source IP hex: {source_ip_u128:032x}")
+                        # Generate HMAC-SHA256 hash and truncate to 128 bits (16 bytes)
+                        mac = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
 
-                    mac_ip = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
-                    mac_ip.update(time_bytes_for_hash)
-                    mac_ip.update(source_ip_u128.to_bytes(16, byteorder='big'))
-                    packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
+                        # print(f"time_bytes {time_bytes.hex()}")
+                        mac.update(time_bytes_for_hash)
+                        packet_hash = mac.digest()[:8]  # Truncate to 64 bits
+                        # print(f"Packet hash (hex): {packet_hash.hex()}")
+                        # print(f"Packet hash full (hex): {mac.digest().hex()}")
+                        try:
+                            # Attempt to parse the input string as an IP address (either IPv4 or IPv6)
+                            ip_obj = ipaddress.ip_address(self.source_ip)
+                            if isinstance(ip_obj, ipaddress.IPv6Address):
+                                source_ip_u128 = int(ipaddress.IPv6Address(ip_obj))
+                            elif isinstance(ip_obj, ipaddress.IPv4Address):
+                                source_ip_u128 = int(ipaddress.IPv4Address(ip_obj)) + 0xffff00000000
+                            else:
+                                source_ip_u128 = 0x0
+                        except ValueError as e:
+                            # Catch and report invalid IP address strings
+                            print(f"Error: {e}")
 
-                    # Construct the packet
-                    # ! specifies network (big-endian) byte order.
-                    # 4s specifies four bytes for the string.
-                    # I specifies a 4-byte unsigned int for seq_res.
-                    # B specifies a 1-byte unsigned char for status.
-                    # 4s specifies four bytes for time_bytes (aka time)
-                    # 8s specifies 8 bytes for packet_hash
-                    # 4s specifies 4 bytes for packet_ip_hash
-                    data = struct.pack('!4sI4s8s4s', b'RP01', sequence, time_bytes, packet_hash, packet_ip_hash)
 
-                    debug_token = False
+                        # print(f"Source IP hex: {source_ip_u128:032x}")
 
-                    if debug_token:
-                        # Add your token here to debug some token
-                        base64_token = 'Z7DPmUpCi1Du3a/EAp+Bew=='
-                        mytoken = base64.b64decode(base64_token)
-                        # print(f"Original token (in hex): {data.hex()}")
+                        mac_ip = hmac.new(self.seed.encode(), digestmod=hashlib.sha256)
+                        mac_ip.update(time_bytes_for_hash)
+                        mac_ip.update(source_ip_u128.to_bytes(16, byteorder='big'))
+                        packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
+
+                        # Construct the packet
+                        # ! specifies network (big-endian) byte order.
+                        # 4s specifies four bytes for the string.
+                        # I specifies a 4-byte unsigned int for seq_res.
+                        # B specifies a 1-byte unsigned char for status.
+                        # 4s specifies four bytes for time_bytes (aka time)
+                        # 8s specifies 8 bytes for packet_hash
+                        # 4s specifies 4 bytes for packet_ip_hash
+                        data = struct.pack('!4sI4s8s4s', b'RP01', sequence, time_bytes, packet_hash, packet_ip_hash)
+                    else:
+                        try:
+                            mytoken = base64.b64decode(args.token)
+                        except (ValueError, binascii.Error) as e:
+                            print(f"Error decoding token: {e}")
+                            exit(1)
+                        if len(mytoken) != 16:
+                            print("Token length invalid")
+                            exit(1)
+                        # print(f"Token (in hex): {mytoken.hex()}")
                         data = struct.pack('!4sI16s', b'RP01', sequence, mytoken)
 
 
@@ -189,9 +196,18 @@ if __name__ == '__main__':
     parser = ArgumentParser(description="UDP Ping Client with HMAC-SHA256 validation")
     parser.add_argument("--host", required=True, help="Hostname of server")
     parser.add_argument("--port", type=int, default=444, help="Server port (default: 444)")
-    parser.add_argument("--seed", required=True, help="Seed")
-    parser.add_argument("--ip", required=True, help="Source IP for HMAC calculation")
+    parser.add_argument("--seed",  help="Seed")
+    parser.add_argument("--ip", help="Source IP for HMAC calculation")
+    parser.add_argument("--token", help="Base64 encoded token")
     args = parser.parse_args()
+
+    # Check mutual exclusion
+    if args.token and (args.seed or args.ip):
+        parser.error("--token cannot be used with --seed or --ip")
+
+    #  Ensure either token or both seed+ip are provided
+    if not args.token and not (args.seed and args.ip):
+        parser.error("either --token or both --seed and --ip are required")
 
     client = PingClient(args.host, args.port, args.seed, args.ip)
     client.run()
