@@ -237,7 +237,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
                 let packet_ip_hash = &buffer[20..24];
                 debug!("HMAC IP: {}", hex::encode(packet_ip_hash));
 
-                mac_ip.update(&packet_time.to_be_bytes());
+                mac_ip.update(&packet_time_for_hash.to_be_bytes());
                 let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
                 debug!("Own HMAC IP: {}", hex::encode(mac_ip_hash));
 
