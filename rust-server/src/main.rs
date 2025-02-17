@@ -192,6 +192,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             }
 
             let packet_time = u32::from_be_bytes(buffer[8..12].try_into().unwrap()) as u64;
+            let packet_time_for_hash = packet_time as u32;
             let current_time_duration = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap();
@@ -214,7 +215,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             if let Some(seed) = &seed {
                 let packet_hash = &buffer[12..20];
                 let mut mac = HmacSha256::new_from_slice(seed).unwrap();
-                mac.update(&packet_time.to_be_bytes());
+                mac.update(&packet_time_for_hash.to_be_bytes());
                 debug!("HMAC packet: {}", hex::encode(packet_hash));
 
                 if packet_hash != &mac.finalize().into_bytes()[..8] {
