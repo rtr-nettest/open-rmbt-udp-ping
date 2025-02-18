@@ -229,18 +229,18 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
             let src_addr_u128 = src_addr.ip().to_bits();
             debug!("Source address: {} in hex {:032x}", src_addr.ip(), src_addr.ip().to_bits());
 
-            let mut mac_ip = HmacSha256::new_from_slice(&src_addr_u128.to_be_bytes()).unwrap();
-
             let mut ip_match = false;
 
-            if let Some(_seed) = &seed {
+            if let Some(seed) = &seed {
                 let packet_ip_hash = &buffer[20..24];
                 debug!("HMAC IP: {}", hex::encode(packet_ip_hash));
 
+                // final byte[] packetHashIp = HelperFunctions.calculateSha256HMAC(sharedSecret.getBytes(), timeBytes, ipBytes);
+                let mut mac_ip = HmacSha256::new_from_slice(seed).unwrap();
                 mac_ip.update(&packet_time_for_hash.to_be_bytes());
+                mac_ip.update(&src_addr_u128.to_be_bytes());
                 let mac_ip_hash = &mac_ip.finalize().into_bytes()[..4];
                 debug!("Own HMAC IP: {}", hex::encode(mac_ip_hash));
-
 
                 if packet_ip_hash == mac_ip_hash {
                     ip_match = true;
