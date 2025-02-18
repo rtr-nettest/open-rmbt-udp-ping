@@ -1,9 +1,6 @@
 # UDP Ping Client/Server System
 
-
-*This code is not ready for production use*.
-
-A Rust implementation of a UDP-based Ping server with a Python client implementation.
+A Rust implementation of a UDP-based Ping server with a Python demo client implementation.
 The default server UDP port is 444.
 
 ## Server Features
@@ -15,7 +12,7 @@ The default server UDP port is 444.
 
 ## Client Features
 - Client with precise timing
-- Authentication using sha256 HMAC
+- Authentication using sha256 HMAC based token
 
 ## Installation
 
@@ -30,7 +27,7 @@ cd /open-rmbt-udp-ping
 ## Rust server
 
 ```
-UDP Ping Server 0.1.0
+UDP Ping Server 1.0.0
 
 USAGE:
     udp_server [OPTIONS]
@@ -46,6 +43,8 @@ OPTIONS:
     -
 ```
 
+The debug logging can also be enabled or disabled during runtime using signal `SIGUSR1`.
+
 ```bash
 cd rust-server
 
@@ -55,8 +54,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 # get build-essential
 apt -y install build-essential
 
-cargo build --release 
-target/release/udp_server -c 0-1 -s topsecret
+cd rust-server
+# build
+cargo build --release
+# install 
+cp target/release/udp_server /usr/local/bin 
+# manual start
+udp_server -c 0-1 -s topsecret
+
 ```
 Format:
 - Request: as '!4sI4s8s4s' using: 'RP01', sequence, time_bytes, packet_hash, packet_ip_hash
@@ -76,17 +81,37 @@ Format:
 [2025-02-12T08:18:59Z DEBUG udp_server] Sending response: 5252303149e8964b
 ```
 
+### Service for systemd
+
+```bash
+cp systemd/open-rmbt-udp-ping.service /lib/systemd/system/
+systemctl daemon-reload
+systemctl start open-rmbt-udp-ping
+# check status
+systemctl status open-rmbt-udp-ping
+# enable service  
+systemctl enable open-rmbt-udp-ping
+```
+
+## Utility
+```
+makeToken.py --seed SEED --ip IP
+```
+This utility can be used to prepare a token (e.g. `Z7QxVTGtS3CGMZ2BzuEkag==`)
+
+IP is the IP of the client (source address to the server)
+SEED is the shared secret to authenticate against the UDP server. In normal operatioon, the shared secret is set 
+in the RMBTControlServer and the same seed is configured on the UDP server.
+
 ## Client
 ```
-udp-ping-token.py [-h] [--host HOST] [--port PORT] --seed SEED --ip IP
+udp-ping-token.py [-h] --host HOST [--port PORT] --token TOKEN  
+udp-ping-token.py [-h] --host HOST [--port PORT] --seed SEED --ip IP
 ```
-IP is the IP of the client (source address to the server)
+The client can use a prepared TOKEN (first variant of command line options) or generate the token itself, in that 
+case SEED and IP must be provided.
 
-Normally the SEED (shared secret) is set in the RMBTControlServer and the same seed is configured
-on the UDP server. To make this client independent of the ecosystem, it also includes the token generation,
-thus IP and SEED need to be specified. In normal operation, the client would just forward the token received
-from the RMBTControlServer
-
+Example:
 ```bash
 python3 client/udp_ping_token.py --host udp.example.com --port 444 --seed topsecret  --ip 1.2.3.4
 ```
