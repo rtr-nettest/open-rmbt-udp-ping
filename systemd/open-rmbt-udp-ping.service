@@ -7,7 +7,8 @@ User=udp_ping
 Group=udp_ping
 # add -d for debug
 # replace "topsecret" with the actual seed
-ExecStart=/usr/local/bin/udp_server -s topsecret -c 0-4
+# optionally restrict to some cpus, eg. -c 0-4 for first 4 cpus
+ExecStart=/usr/local/bin/udp_server -s topsecret
 Restart=always
 Environment=RUST_LOG=info
 AmbientCapabilities=CAP_NET_BIND_SERVICE

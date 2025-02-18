@@ -85,6 +85,7 @@ Format:
 ### Service for systemd
 
 ```bash
+useradd udp_ping
 cp systemd/open-rmbt-udp-ping.service /lib/systemd/system/
 systemctl daemon-reload
 systemctl start open-rmbt-udp-ping
@@ -92,6 +93,17 @@ systemctl start open-rmbt-udp-ping
 systemctl status open-rmbt-udp-ping
 # enable service  
 systemctl enable open-rmbt-udp-ping
+```
+
+### Debug logging
+
+Enable or Disable debug logging:
+```
+pkill -SIGUSR1 udp_server
+```
+Follow log in systemd:
+```
+journalctl -fu open-rmbt-udp-ping
 ```
 
 ## Utility
