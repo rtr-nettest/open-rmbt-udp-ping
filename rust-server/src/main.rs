@@ -2,17 +2,20 @@ use std::io;
 use std::mem::{size_of, MaybeUninit};
 use std::net::{Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::os::unix::io::AsRawFd;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use socket2::{Domain, Protocol, Socket, Type};
-use libc::{recvmmsg, sendmmsg, mmsghdr, iovec, sockaddr_in6, ntohs};
+use libc::{recvmmsg, sendmmsg, mmsghdr, iovec, sockaddr_in6, ntohs, SIGUSR1};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use clap::{Arg, App};
 use core_affinity::{CoreId, get_core_ids};
-use log::{debug, error, info};
+use log::{debug, error, info, Log, Level, LevelFilter, Metadata, Record};
+
+use signal_hook::iterator::Signals;
 
 const BATCH_SIZE: usize = 64;
 const BUFFER_SIZE: usize = 1024;
@@ -20,6 +23,37 @@ const MAX_TIME_DIFF_EARLY: u64 = 30; // 30 s
 const MAX_TIME_DIFF_LATE: u64 = 4 * 60 * 60; // 4h
 
 type HmacSha256 = Hmac<Sha256>;
+
+static DEBUG_ENABLED: AtomicBool = AtomicBool::new(false);
+
+struct DynamicLogger;
+
+impl Log for DynamicLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        if metadata.level() == Level::Debug {
+            DEBUG_ENABLED.load(Ordering::Relaxed)
+        } else {
+            metadata.level() <= Level::Info
+        }
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            eprintln!(
+                "{} [{}] {}",
+                now,
+                record.level(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
 
 fn main() {
     let matches = App::new("UDP Ping Server")
@@ -49,15 +83,14 @@ fn main() {
         .get_matches();
 
     // Initialize logging
-    if matches.is_present("debug") {
-        env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Debug)
-            .init();
-        debug!("Debug logging enabled");
-    } else {
-        env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Info)
-            .init();
+    let debug_flag = matches.is_present("debug");
+    DEBUG_ENABLED.store(debug_flag, Ordering::Relaxed);
+
+    log::set_boxed_logger(Box::new(DynamicLogger)).unwrap();
+    log::set_max_level(LevelFilter::Debug);
+
+    if debug_flag {
+        info!("Debug logging enabled at startup");
     }
 
     let seed = matches.value_of("seed").map(|s| s.as_bytes().to_vec());
@@ -94,6 +127,22 @@ fn main() {
             worker_thread(port, seed.as_ref().clone()).expect("Worker thread failed");
         });
     }
+
+    // Set up signal handler for SIGUSR1 to toggle debug logging
+    let mut signals = Signals::new(&[SIGUSR1]).expect("Failed to create signal handler");
+    thread::spawn(move || {
+        for _ in signals.forever() {
+            let prev = DEBUG_ENABLED.fetch_xor(true, Ordering::Relaxed);
+            let new_state = !prev;
+            eprintln!(
+                "Debug logging {}",
+                if new_state { "enabled" } else { "disabled" }
+            );
+        }
+    });
+
+    info!("Server running on port {} ({} threads)", port, cores.len());
+    thread::park();
 
     info!("Server running on port {} ({} threads)", port, cores.len());
     thread::park()
@@ -177,7 +226,7 @@ fn worker_thread(port: u16, seed: Option<Vec<u8>>) -> io::Result<()> {
         };
 
         if received <= 0 {
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            thread::sleep(std::time::Duration::from_millis(1));
             continue;
         }
 
