@@ -28,7 +28,7 @@ def generate_token(seed, source_ip):
 
     print("Current time:", time_obj.strftime("%Y-%m-%d %H:%M:%S"))
     time_bytes = struct.pack(">I", current_time)
-    time_bytes_for_hash = current_time.to_bytes(8, byteorder='big')
+    time_bytes_for_hash = current_time.to_bytes(4, byteorder='big')
     print(f"time hex {time_bytes.hex()}")
 
     # Generate HMAC with seed
@@ -37,8 +37,11 @@ def generate_token(seed, source_ip):
 
     # Generate HMAC with source IP
     ip_key = source_ip_u128.to_bytes(16, byteorder='big')
-    mac_ip = hmac.new(ip_key, time_bytes_for_hash, hashlib.sha256)
-    packet_ip_hash = mac_ip.digest()[:4]
+
+    mac_ip = hmac.new(seed.encode(), digestmod=hashlib.sha256)
+    mac_ip.update(time_bytes_for_hash)
+    mac_ip.update(source_ip_u128.to_bytes(16, byteorder='big'))
+    packet_ip_hash = mac_ip.digest()[:4]  # Truncate to 32 bits
 
     # Construct the packet
     sequence = 1
