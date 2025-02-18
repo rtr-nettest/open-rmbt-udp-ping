@@ -94,6 +94,17 @@ systemctl status open-rmbt-udp-ping
 systemctl enable open-rmbt-udp-ping
 ```
 
+### Debug logging
+
+Enable or Disable debug logging:
+```
+pkill -SIGUSR1 udp_server
+```
+Follow log in systemd:
+```
+journalctl -fu open-rmbt-udp-ping
+```
+
 ## Utility
 ```
 makeToken.py --seed SEED --ip IP
