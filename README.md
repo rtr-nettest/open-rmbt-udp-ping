@@ -84,6 +84,7 @@ Format:
 ### Service for systemd
 
 ```bash
+useradd udp_ping
 cp systemd/open-rmbt-udp-ping.service /lib/systemd/system/
 systemctl daemon-reload
 systemctl start open-rmbt-udp-ping
