@@ -3,11 +3,15 @@ Description=OpenRMBT UDP Ping Server
 After=network.target
 
 [Service]
-ExecStart=/opt/open-rmbt-udp-ping/rust-server/target/release/udp_server
+User=udp_ping
+Group=udp_ping
+# add -d for debug
+# replace "topsecret" with the actual seed
+ExecStart=/usr/local/bin/udp_server -s topsecret -c 0-4
 Restart=always
-User=nobody
-Group=nogroup
 Environment=RUST_LOG=info
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
