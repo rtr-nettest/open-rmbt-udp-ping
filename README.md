@@ -27,7 +27,7 @@ cd /open-rmbt-udp-ping
 ## Rust server
 
 ```
-UDP Ping Server 1.0.0
+UDP Ping Server 1.1.0
 
 USAGE:
     udp_server [OPTIONS]
@@ -40,6 +40,7 @@ OPTIONS:
     -d, --debug      Enable debug logging
     -c, --cpus <CPUS>    CPU cores to use (e.g. 5-8 or 5,6,7,8)
     -s, --seed <SEED>    Sets the HMAC-SHA256 seed
+    -p, --port <PORT>    Sets the port to listen on (default: 444)
     -
 ```
 

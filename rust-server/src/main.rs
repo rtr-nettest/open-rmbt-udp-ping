@@ -80,6 +80,14 @@ fn main() {
                 .long("debug")
                 .help("Enable debug logging"),
         )
+        .arg(
+            Arg::with_name("port")
+                .short("p")
+                .long("port")
+                .value_name("PORT")
+                .help("Sets the port to listen on (default: 444)")
+                .takes_value(true),
+        )
         .get_matches();
 
     // Initialize logging
@@ -94,7 +102,10 @@ fn main() {
     }
 
     let seed = matches.value_of("seed").map(|s| s.as_bytes().to_vec());
-    let port = 444;
+
+    let port = matches.value_of("port")
+        .map(|s| s.parse::<u16>().expect("Invalid port number"))
+        .unwrap_or(444);
 
     // Parse CPU list
     let cores = parse_cpu_list(matches.value_of("cpus")).unwrap_or_else(|| {
