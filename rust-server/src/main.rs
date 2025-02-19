@@ -155,8 +155,6 @@ fn main() {
     info!("Server running on port {} ({} threads)", port, cores.len());
     thread::park();
 
-    info!("Server running on port {} ({} threads)", port, cores.len());
-    thread::park()
 }
 
 
