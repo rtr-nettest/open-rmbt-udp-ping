@@ -29,7 +29,16 @@ impl Config {
                     .short('s')
                     .long("seed")
                     .value_name("SEED")
-                    .help("HMAC-SHA256 shared secret; omit to accept all packets without authentication"),
+                    .conflicts_with("seed-file")
+                    .help("HMAC-SHA256 shared secret (visible in process list — prefer --seed-file)"),
+            )
+            .arg(
+                Arg::new("seed-file")
+                    .short('f')
+                    .long("seed-file")
+                    .value_name("PATH")
+                    .conflicts_with("seed")
+                    .help("File containing the HMAC-SHA256 shared secret (one line, whitespace trimmed)"),
             )
             .arg(
                 Arg::new("bind")
@@ -65,9 +74,11 @@ impl Config {
         // Apply the debug flag immediately so subsequent log::debug! calls are visible.
         DEBUG_ENABLED.store(matches.get_flag("debug"), Ordering::Relaxed);
 
-        let seed = matches
-            .get_one::<String>("seed")
-            .map(|s| s.as_bytes().to_vec());
+        let seed = if let Some(path) = matches.get_one::<String>("seed-file") {
+            Some(read_seed_file(path))
+        } else {
+            matches.get_one::<String>("seed").map(|s| s.as_bytes().to_vec())
+        };
 
         let port = matches
             .get_one::<String>("port")
@@ -101,6 +112,21 @@ impl Config {
     }
 }
 
+/// Reads the shared secret from `path`, trims surrounding whitespace, and returns it as bytes.
+/// Exits the process with an error message if the file cannot be read or is empty.
+fn read_seed_file(path: &str) -> Vec<u8> {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Cannot read seed file '{path}': {e}");
+        std::process::exit(1);
+    });
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        eprintln!("Seed file '{path}' is empty");
+        std::process::exit(1);
+    }
+    trimmed.as_bytes().to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,5 +144,31 @@ mod tests {
     #[test]
     fn threads_per_socket_minimum_one() {
         assert_eq!(make_config(1).threads_per_socket(), 1);
+    }
+
+    // ── read_seed_file ────────────────────────────────────────────────────────
+
+    fn write_temp(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(name);
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn seed_file_plain_content() {
+        let p = write_temp("udp_server_test_seed_plain.txt", "my-secret");
+        assert_eq!(read_seed_file(p.to_str().unwrap()), b"my-secret");
+    }
+
+    #[test]
+    fn seed_file_trims_surrounding_whitespace() {
+        let p = write_temp("udp_server_test_seed_ws.txt", "  my-secret\n");
+        assert_eq!(read_seed_file(p.to_str().unwrap()), b"my-secret");
+    }
+
+    #[test]
+    fn seed_file_trims_windows_line_ending() {
+        let p = write_temp("udp_server_test_seed_crlf.txt", "my-secret\r\n");
+        assert_eq!(read_seed_file(p.to_str().unwrap()), b"my-secret");
     }
 }
