@@ -1,7 +1,7 @@
+use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use std::net::{SocketAddr, SocketAddrV6};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use hmac::{Hmac, Mac};
 use log::debug;
 use sha2::Sha256;
 
@@ -85,7 +85,7 @@ fn is_within_time_window(packet_time: u32) -> bool {
 /// Returns `true` when `hash` matches the first 8 bytes of HMAC-SHA256(seed, timestamp).
 /// Authenticates that the sender knows the shared secret and used the correct timestamp.
 fn verify_packet_hmac(seed: &[u8], packet_time: u32, hash: &[u8]) -> bool {
-    let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
     mac.update(&packet_time.to_be_bytes());
     let expected = mac.finalize().into_bytes();
     debug!("HMAC packet received={} expected={}", hex::encode(hash), hex::encode(&expected[..8]));
@@ -96,7 +96,7 @@ fn verify_packet_hmac(seed: &[u8], packet_time: u32, hash: &[u8]) -> bool {
 /// The source IP is always treated as a 128-bit IPv6 value (IPv4 addresses are mapped first)
 /// to keep the HMAC input format consistent regardless of address family.
 fn verify_ip_hmac(seed: &[u8], packet_time: u32, src: SocketAddrV6, hash: &[u8]) -> bool {
-    let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+    let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
     mac.update(&packet_time.to_be_bytes());
     mac.update(&src.ip().to_bits().to_be_bytes()); // 128-bit big-endian
     let expected = mac.finalize().into_bytes();
@@ -164,12 +164,12 @@ mod tests {
 
         if let Some(seed) = seed {
             // Timestamp HMAC: first 8 bytes of HMAC-SHA256(seed, timestamp)
-            let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+            let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
             mac.update(&packet_time.to_be_bytes());
             p[12..20].copy_from_slice(&mac.finalize().into_bytes()[..8]);
 
             // IP HMAC: first 4 bytes of HMAC-SHA256(seed, timestamp ‖ src_ip_128bit)
-            let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+            let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
             mac.update(&packet_time.to_be_bytes());
             mac.update(&src.ip().to_bits().to_be_bytes());
             p[20..24].copy_from_slice(&mac.finalize().into_bytes()[..4]);
@@ -239,7 +239,7 @@ mod tests {
     fn packet_hmac_correct_seed_accepted() {
         let seed = b"test-seed";
         let t: u32 = 1_700_000_000;
-        let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
         mac.update(&t.to_be_bytes());
         let hash = mac.finalize().into_bytes();
         assert!(verify_packet_hmac(seed, t, &hash[..8]));
@@ -248,7 +248,7 @@ mod tests {
     #[test]
     fn packet_hmac_wrong_seed_rejected() {
         let t: u32 = 1_700_000_000;
-        let mut mac = HmacSha256::new_from_slice(b"correct-seed").unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(b"correct-seed").unwrap();
         mac.update(&t.to_be_bytes());
         let hash = mac.finalize().into_bytes();
         assert!(!verify_packet_hmac(b"wrong-seed", t, &hash[..8]));
@@ -258,7 +258,7 @@ mod tests {
     fn packet_hmac_corrupted_hash_rejected() {
         let seed = b"test-seed";
         let t: u32 = 1_700_000_000;
-        let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
         mac.update(&t.to_be_bytes());
         let mut hash = mac.finalize().into_bytes()[..8].to_vec();
         hash[0] ^= 0xFF; // flip one bit
@@ -272,7 +272,7 @@ mod tests {
         let seed = b"test-seed";
         let t: u32 = 1_700_000_000;
         let src = SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 1234, 0, 0);
-        let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
         mac.update(&t.to_be_bytes());
         mac.update(&src.ip().to_bits().to_be_bytes());
         let hash = mac.finalize().into_bytes();
@@ -285,7 +285,7 @@ mod tests {
         let t: u32 = 1_700_000_000;
         let real = SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1), 1234, 0, 0);
         let spoofed = SocketAddrV6::new(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2), 1234, 0, 0);
-        let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
         mac.update(&t.to_be_bytes());
         mac.update(&real.ip().to_bits().to_be_bytes());
         let hash = mac.finalize().into_bytes();
@@ -299,7 +299,7 @@ mod tests {
         let seed = b"test-seed";
         let t: u32 = 1_700_000_000;
         let mapped = SocketAddrV6::new(Ipv4Addr::new(192, 168, 1, 1).to_ipv6_mapped(), 5678, 0, 0);
-        let mut mac = HmacSha256::new_from_slice(seed).unwrap();
+        let mut mac = <HmacSha256 as KeyInit>::new_from_slice(seed).unwrap();
         mac.update(&t.to_be_bytes());
         mac.update(&mapped.ip().to_bits().to_be_bytes());
         let hash = mac.finalize().into_bytes();

@@ -8,7 +8,6 @@ The default server UDP port is 444.
 - Multi-Threaded
 - Supports CPU-pinning
 - Authentication using sha256 HMAC
-- Linux only (not portable to osX or Windows)
 
 ## Client Features
 - Client with precise timing
@@ -27,7 +26,7 @@ cd /open-rmbt-udp-ping
 ## Rust server
 
 ```
-UDP Ping Server 1.1.0
+UDP Ping Server 2.0.1
 
 USAGE:
     udp_server [OPTIONS]
@@ -37,14 +36,18 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-    -d, --debug      Enable debug logging
-    -c, --cpus <CPUS>    CPU cores to use (e.g. 5-8 or 5,6,7,8)
-    -s, --seed <SEED>    Sets the HMAC-SHA256 seed
-    -p, --port <PORT>    Sets the port to listen on (default: 444)
-    -
+  -s, --seed <SEED>       HMAC-SHA256 shared secret (visible in process list — prefer --seed-file)
+  -f, --seed-file <PATH>  File containing the HMAC-SHA256 shared secret (one line, whitespace trimmed)
+  -b, --bind <ADDR>       IP address to listen on; may be repeated (default: all interfaces)
+  -t, --threads <N>       Worker threads per bound address (default: logical CPU count)
+  -d, --debug             Enable debug logging at startup (also toggled at runtime via SIGUSR1 on Unix)
+  -p, --port <PORT>       UDP port to listen on (default: 444)
+  -h, --help              Print help
+  -V, --version           Print version
+
 ```
 
-The debug logging can also be enabled or disabled during runtime using signal `SIGUSR1`.
+On Linux debug logging can also be enabled or disabled during runtime using signal `SIGUSR1`.
 
 ```bash
 cd rust-server
