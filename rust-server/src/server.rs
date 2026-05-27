@@ -45,7 +45,7 @@ impl Server {
     /// Spawns worker threads and blocks until they all exit.
     /// Under normal operation the threads loop forever, so this never returns.
     pub fn run(self) {
-        let threads_per_socket = self.config.threads_per_socket(self.sockets.len());
+        let threads_per_socket = self.config.threads_per_socket();
         info!("{} socket(s), {threads_per_socket} thread(s) each", self.sockets.len());
 
         let handles: Vec<JoinHandle<()>> = self

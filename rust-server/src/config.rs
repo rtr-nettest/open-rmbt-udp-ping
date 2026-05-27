@@ -12,7 +12,7 @@ pub struct Config {
     pub port: u16,
     /// Optional HMAC-SHA256 shared secret. When absent, packets are not authenticated.
     pub seed: Option<Vec<u8>>,
-    /// Total number of worker threads to spread across all bound sockets.
+    /// Number of worker threads per bound socket.
     pub num_threads: usize,
     /// Addresses to bind to. Empty means bind to all interfaces (dual-stack wildcard).
     pub bind_addrs: Vec<IpAddr>,
@@ -44,7 +44,7 @@ impl Config {
                     .short('t')
                     .long("threads")
                     .value_name("N")
-                    .help("Total worker threads, spread across bound addresses (default: logical CPU count)"),
+                    .help("Worker threads per bound address (default: logical CPU count)"),
             )
             .arg(
                 Arg::new("debug")
@@ -96,9 +96,8 @@ impl Config {
     }
 
     /// How many worker threads each socket should receive.
-    /// The total thread budget is divided evenly; each socket gets at least one thread.
-    pub fn threads_per_socket(&self, num_sockets: usize) -> usize {
-        (self.num_threads / num_sockets).max(1)
+    pub fn threads_per_socket(&self) -> usize {
+        self.num_threads
     }
 }
 
@@ -111,18 +110,13 @@ mod tests {
     }
 
     #[test]
-    fn threads_distributed_evenly() {
-        assert_eq!(make_config(8).threads_per_socket(4), 2);
+    fn threads_per_socket_is_independent_of_socket_count() {
+        // --threads N always means N threads per socket, regardless of how many sockets exist.
+        assert_eq!(make_config(8).threads_per_socket(), 8);
     }
 
     #[test]
-    fn threads_minimum_one_per_socket() {
-        // More sockets than threads → every socket still gets at least 1 thread.
-        assert_eq!(make_config(2).threads_per_socket(8), 1);
-    }
-
-    #[test]
-    fn threads_single_socket_gets_all() {
-        assert_eq!(make_config(6).threads_per_socket(1), 6);
+    fn threads_per_socket_minimum_one() {
+        assert_eq!(make_config(1).threads_per_socket(), 1);
     }
 }
