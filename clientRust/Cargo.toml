@@ -1,0 +1,16 @@
+[package]
+name = "udp-ping-client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "udp-ping-client"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+rand = "0.8"
+ctrlc = "3"
