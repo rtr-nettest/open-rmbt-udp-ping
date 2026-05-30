@@ -1,5 +1,6 @@
 use std::io;
 use std::net::{IpAddr, Ipv6Addr, SocketAddr, UdpSocket};
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
@@ -9,19 +10,21 @@ use socket2::{Domain, Protocol, Socket, Type};
 use crate::config::Config;
 use crate::packet;
 
-/// Size of the receive buffer per worker thread. Must be at least 24 bytes (one RP01 packet).
+/// Receive buffer per worker thread — large enough for one RP01 packet.
 const BUFFER_SIZE: usize = 1024;
+/// Maximum epoll events dequeued per epoll_wait call.
+const EPOLL_BATCH: usize = 16;
 
 /// A bound UDP server: one socket per configured address, ready to spawn workers.
 pub struct Server {
     config: Config,
-    /// Each element is shared among the worker threads assigned to that socket.
     sockets: Vec<Arc<UdpSocket>>,
 }
 
 impl Server {
     /// Binds one UDP socket for every address in `config.bind_addrs`, or a single
     /// dual-stack wildcard socket when no addresses are specified.
+    /// Panics immediately on any bind failure so the server never starts partially bound.
     pub fn bind(config: Config) -> io::Result<Self> {
         let sockets: Vec<Arc<UdpSocket>> = if config.bind_addrs.is_empty() {
             info!("Listening on all interfaces, port {}", config.port);
@@ -42,26 +45,44 @@ impl Server {
         Ok(Server { config, sockets })
     }
 
-    /// Spawns worker threads and blocks until they all exit.
-    /// Under normal operation the threads loop forever, so this never returns.
+    /// Starts the epoll dispatch loop.
+    ///
+    /// Design: one shared epoll fd; all bound sockets registered with EPOLLIN|EPOLLEXCLUSIVE.
+    /// `num_threads` worker threads each call epoll_wait() on the shared fd, then drain
+    /// whichever socket(s) became ready. EPOLLEXCLUSIVE prevents thundering herd: only one
+    /// thread is woken per readiness event. Total thread count is independent of socket count.
     pub fn run(self) {
-        let threads_per_socket = self.config.threads_per_socket();
-        info!("{} socket(s), {threads_per_socket} thread(s) each", self.sockets.len());
+        let num_threads = self.config.num_threads;
+        let seed = self.config.seed;
+        info!("{} socket(s), {num_threads} worker thread(s) total", self.sockets.len());
 
-        let handles: Vec<JoinHandle<()>> = self
-            .sockets
-            .iter()
-            .flat_map(|socket| {
-                // Each socket gets its own slice of threads; clone the Arc once per socket.
-                let socket = socket.clone();
-                let seed = self.config.seed.clone();
-                (0..threads_per_socket).map(move |idx| {
-                    let socket = socket.clone();
-                    let seed = seed.clone();
-                    thread::spawn(move || {
-                        debug!("Worker {idx} started on {}", socket.local_addr().unwrap());
-                        worker_loop(socket, seed);
-                    })
+        for s in &self.sockets {
+            s.set_nonblocking(true).expect("set_nonblocking failed");
+        }
+
+        let epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if epoll_fd < 0 {
+            panic!("epoll_create1: {}", io::Error::last_os_error());
+        }
+
+        let sockets = Arc::new(self.sockets);
+        for (i, socket) in sockets.iter().enumerate() {
+            let mut ev = libc::epoll_event {
+                events: (libc::EPOLLIN | libc::EPOLLEXCLUSIVE) as u32,
+                u64: i as u64,
+            };
+            if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, socket.as_raw_fd(), &mut ev) } < 0 {
+                panic!("epoll_ctl add socket {i}: {}", io::Error::last_os_error());
+            }
+        }
+
+        let handles: Vec<JoinHandle<()>> = (0..num_threads)
+            .map(|idx| {
+                let sockets = sockets.clone();
+                let seed = seed.clone();
+                thread::spawn(move || {
+                    debug!("Worker {idx} started");
+                    worker_loop(epoll_fd, sockets, seed);
                 })
             })
             .collect();
@@ -72,30 +93,50 @@ impl Server {
     }
 }
 
-/// Runs forever: receives UDP packets and writes a response for each valid one.
+/// Runs forever: waits for ready sockets via epoll and drains each one completely.
 ///
-/// Because each socket is bound to a specific local address, `send_to` automatically
-/// uses that address as the source IP — so replies always come from the same IP the
-/// client originally addressed.
-fn worker_loop(socket: Arc<UdpSocket>, seed: Option<Vec<u8>>) {
+/// Non-blocking recv_from is called in a loop until EAGAIN/WouldBlock to ensure all
+/// queued packets are processed before returning to epoll_wait.
+fn worker_loop(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, seed: Option<Vec<u8>>) {
     let seed = seed.as_deref();
     let mut buffer = [0u8; BUFFER_SIZE];
+    let mut events = [libc::epoll_event { events: 0, u64: 0 }; EPOLL_BATCH];
 
     loop {
-        let (len, src_addr) = match socket.recv_from(&mut buffer) {
-            Ok(r) => r,
-            Err(e) => {
-                error!("recv_from: {e}");
+        let n = unsafe {
+            libc::epoll_wait(epoll_fd, events.as_mut_ptr(), EPOLL_BATCH as i32, -1)
+        };
+        if n < 0 {
+            let e = io::Error::last_os_error();
+            if e.kind() == io::ErrorKind::Interrupted {
                 continue;
             }
-        };
+            error!("epoll_wait: {e}");
+            continue;
+        }
 
-        debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
-
-        if let Some(response) = packet::process_packet(&buffer[..len], src_addr, seed) {
-            debug!("Sending response: {}", hex::encode(response));
-            if let Err(e) = socket.send_to(&response, src_addr) {
-                error!("send_to: {e}");
+        for ev in &events[..n as usize] {
+            let socket = &sockets[ev.u64 as usize];
+            // Drain all queued packets from this socket before returning to epoll_wait.
+            loop {
+                match socket.recv_from(&mut buffer) {
+                    Ok((len, src_addr)) => {
+                        debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
+                        if let Some(response) =
+                            packet::process_packet(&buffer[..len], src_addr, seed)
+                        {
+                            debug!("Sending response: {}", hex::encode(response));
+                            if let Err(e) = socket.send_to(&response, src_addr) {
+                                error!("send_to: {e}");
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => {
+                        error!("recv_from: {e}");
+                        break;
+                    }
+                }
             }
         }
     }

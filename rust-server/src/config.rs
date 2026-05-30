@@ -53,7 +53,7 @@ impl Config {
                     .short('t')
                     .long("threads")
                     .value_name("N")
-                    .help("Worker threads per bound address (default: logical CPU count)"),
+                    .help("Total worker threads shared across all sockets (default: logical CPU count)"),
             )
             .arg(
                 Arg::new("debug")
@@ -106,8 +106,8 @@ impl Config {
         Config { port, seed, num_threads, bind_addrs }
     }
 
-    /// How many worker threads each socket should receive.
-    pub fn threads_per_socket(&self) -> usize {
+    /// Total number of worker threads shared across all sockets.
+    pub fn num_worker_threads(&self) -> usize {
         self.num_threads
     }
 }
@@ -136,14 +136,13 @@ mod tests {
     }
 
     #[test]
-    fn threads_per_socket_is_independent_of_socket_count() {
-        // --threads N always means N threads per socket, regardless of how many sockets exist.
-        assert_eq!(make_config(8).threads_per_socket(), 8);
+    fn num_worker_threads_reflects_config() {
+        assert_eq!(make_config(8).num_worker_threads(), 8);
     }
 
     #[test]
-    fn threads_per_socket_minimum_one() {
-        assert_eq!(make_config(1).threads_per_socket(), 1);
+    fn num_worker_threads_minimum_one() {
+        assert_eq!(make_config(1).num_worker_threads(), 1);
     }
 
     // ── read_seed_file ────────────────────────────────────────────────────────
