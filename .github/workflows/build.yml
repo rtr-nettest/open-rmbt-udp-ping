@@ -1,0 +1,72 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  client:
+    name: Build Rust client
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clientRust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clientRust/target
+          key: client-${{ runner.os }}-${{ hashFiles('clientRust/Cargo.lock') }}
+          restore-keys: client-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: udp-ping-client-linux
+          path: clientRust/target/release/udp-ping-client
+
+  server:
+    name: Build Rust server
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust-server
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-server/target
+          key: server-${{ runner.os }}-${{ hashFiles('rust-server/Cargo.lock') }}
+          restore-keys: server-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: udp-ping-server-linux
+          path: rust-server/target/release/udp_server
