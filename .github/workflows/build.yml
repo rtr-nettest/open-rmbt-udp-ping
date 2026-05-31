@@ -1,11 +1,49 @@
-name: Build UDP Ping Server
+name: Build
 
-on: [push]
+on:
+  push:
+  pull_request:
 
 jobs:
 
-  build:
-    name: ${{ matrix.name }}
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Rust client — Linux only (single artifact)
+  # ─────────────────────────────────────────────────────────────────────────────
+  client:
+    name: Client / linux-x64
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clientRust
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            clientRust/target
+          key: client-${{ runner.os }}-${{ hashFiles('clientRust/Cargo.lock') }}
+          restore-keys: client-${{ runner.os }}-
+
+      - name: Build
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: udp-ping-client-linux
+          path: clientRust/target/release/udp-ping-client
+          retention-days: 90
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # Rust server — static musl for Linux; native/cross for macOS; MSVC for Windows
+  # ─────────────────────────────────────────────────────────────────────────────
+  server:
+    name: Server / ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -90,7 +128,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.name }}
+          name: server-${{ matrix.name }}
           path: dist/udp-ping-server-${{ matrix.name }}.zip
           retention-days: 90
 
@@ -99,7 +137,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   release:
     runs-on: ubuntu-latest
-    needs: build
+    needs: [client, server]
     if: github.ref_type == 'tag'
     permissions:
       contents: write
@@ -115,8 +153,9 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/linux-x64/*.zip
-            release-assets/linux-arm64/*.zip
-            release-assets/macos-arm64/*.zip
-            release-assets/windows-x64/*.zip
+            release-assets/udp-ping-client-linux/udp-ping-client
+            release-assets/server-linux-x64/*.zip
+            release-assets/server-linux-arm64/*.zip
+            release-assets/server-macos-arm64/*.zip
+            release-assets/server-windows-x64/*.zip
           token: ${{ secrets.GITHUB_TOKEN }}
