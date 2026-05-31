@@ -56,7 +56,7 @@ impl Server {
     pub fn run(self) {
         use std::os::fd::AsRawFd;
 
-        let num_threads = self.config.num_threads;
+        let num_threads = self.config.num_worker_threads();
         let seed = self.config.seed;
         info!("{} socket(s), {num_threads} worker thread(s) total", self.sockets.len());
 

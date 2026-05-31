@@ -12,7 +12,8 @@ pub struct Config {
     pub port: u16,
     /// Optional HMAC-SHA256 shared secret. When absent, packets are not authenticated.
     pub seed: Option<Vec<u8>>,
-    /// Number of worker threads per bound socket.
+    /// Number of worker threads shared across all sockets (used by the Linux epoll backend).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub num_threads: usize,
     /// Addresses to bind to. Empty means bind to all interfaces (dual-stack wildcard).
     pub bind_addrs: Vec<IpAddr>,
@@ -106,7 +107,8 @@ impl Config {
         Config { port, seed, num_threads, bind_addrs }
     }
 
-    /// Total number of worker threads shared across all sockets.
+    /// Total number of worker threads shared across all sockets (used by the Linux epoll backend).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub fn num_worker_threads(&self) -> usize {
         self.num_threads
     }
