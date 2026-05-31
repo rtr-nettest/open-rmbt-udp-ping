@@ -1,0 +1,122 @@
+name: Build UDP Ping Server
+
+on: [push]
+
+jobs:
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            name: linux-x64
+            use_cross: false
+
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            name: linux-arm64
+            use_cross: true
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            name: macos-arm64
+            use_cross: false
+
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: windows-x64
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust-server/target
+          key: rust-${{ matrix.target }}-${{ hashFiles('rust-server/Cargo.lock', 'rust-server/Cargo.toml') }}
+          restore-keys: rust-${{ matrix.target }}-
+
+      - name: Install musl-tools (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get install -y musl-tools
+
+      - name: Cache cross binary
+        if: matrix.use_cross == true
+        id: cache-cross
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cross
+          key: cross-stable-v1
+
+      - name: Install cross
+        if: matrix.use_cross == true && steps.cache-cross.outputs.cache-hit != 'true'
+        run: cargo install cross
+
+      - name: Build (native)
+        if: matrix.use_cross == false
+        run: cargo build --release --target ${{ matrix.target }} --manifest-path rust-server/Cargo.toml
+
+      - name: Build (cross — Docker-based)
+        if: matrix.use_cross == true
+        working-directory: rust-server
+        run: cross build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp rust-server/target/${{ matrix.target }}/release/udp_server dist/
+          cd dist && zip udp-ping-server-${{ matrix.name }}.zip udp_server
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force dist
+          Copy-Item "rust-server\target\${{ matrix.target }}\release\udp_server.exe" dist\
+          Compress-Archive -Path dist\udp_server.exe -DestinationPath dist\udp-ping-server-${{ matrix.name }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/udp-ping-server-${{ matrix.name }}.zip
+          retention-days: 90
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # GitHub Release — only on tag push
+  # ─────────────────────────────────────────────────────────────────────────────
+  release:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: List assets
+        run: find release-assets -type f | sort
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/linux-x64/*.zip
+            release-assets/linux-arm64/*.zip
+            release-assets/macos-arm64/*.zip
+            release-assets/windows-x64/*.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
