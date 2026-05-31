@@ -12,7 +12,8 @@ pub struct DynamicLogger;
 
 impl Log for DynamicLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        if metadata.level() == Level::Debug {
+        if metadata.level() >= Level::Debug {
+            // Debug and Trace are only shown when DEBUG_ENABLED is set.
             DEBUG_ENABLED.load(Ordering::Relaxed)
         } else {
             metadata.level() <= Level::Info

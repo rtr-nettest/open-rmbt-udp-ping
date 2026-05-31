@@ -1,17 +1,19 @@
 use std::net::IpAddr;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use std::thread;
 
 use clap::{Arg, ArgAction, Command};
 
 use crate::logger::DEBUG_ENABLED;
+use crate::packet::KeyEntry;
 
 /// Validated, parsed command-line configuration.
 pub struct Config {
     /// UDP port to listen on.
     pub port: u16,
-    /// Optional HMAC-SHA256 shared secret. When absent, packets are not authenticated.
-    pub seed: Option<Vec<u8>>,
+    /// HMAC-SHA256 keys. Empty means no authentication (packets are not verified).
+    pub keys: Arc<Vec<KeyEntry>>,
     /// Number of worker threads shared across all sockets (used by the Linux epoll backend).
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub num_threads: usize,
@@ -24,13 +26,13 @@ impl Config {
     /// Also stores the initial debug-logging state in `DEBUG_ENABLED`.
     pub fn from_args() -> Self {
         let matches = Command::new("UDP Ping Server")
-            .version("1.1.0")
+            .version("1.2.0")
             .arg(
                 Arg::new("seed")
                     .short('s')
                     .long("seed")
                     .value_name("SEED")
-                    .conflicts_with("seed-file")
+                    .conflicts_with_all(["seed-file", "keys-file"])
                     .help("HMAC-SHA256 shared secret (visible in process list — prefer --seed-file)"),
             )
             .arg(
@@ -38,8 +40,16 @@ impl Config {
                     .short('f')
                     .long("seed-file")
                     .value_name("PATH")
-                    .conflicts_with("seed")
-                    .help("File containing the HMAC-SHA256 shared secret (one line, whitespace trimmed)"),
+                    .conflicts_with_all(["seed", "keys-file"])
+                    .help("File containing one HMAC-SHA256 shared secret (one line, whitespace trimmed)"),
+            )
+            .arg(
+                Arg::new("keys-file")
+                    .short('k')
+                    .long("keys-file")
+                    .value_name("PATH")
+                    .conflicts_with_all(["seed", "seed-file"])
+                    .help("File with multiple HMAC-SHA256 keys, one per line: '<key> <label>'"),
             )
             .arg(
                 Arg::new("bind")
@@ -75,10 +85,20 @@ impl Config {
         // Apply the debug flag immediately so subsequent log::debug! calls are visible.
         DEBUG_ENABLED.store(matches.get_flag("debug"), Ordering::Relaxed);
 
-        let seed = if let Some(path) = matches.get_one::<String>("seed-file") {
-            Some(read_seed_file(path))
+        let keys = if let Some(path) = matches.get_one::<String>("keys-file") {
+            Arc::new(read_keys_file(path))
+        } else if let Some(path) = matches.get_one::<String>("seed-file") {
+            Arc::new(vec![KeyEntry {
+                key: read_seed_file(path),
+                label: "default".to_string(),
+            }])
+        } else if let Some(s) = matches.get_one::<String>("seed") {
+            Arc::new(vec![KeyEntry {
+                key: s.as_bytes().to_vec(),
+                label: "default".to_string(),
+            }])
         } else {
-            matches.get_one::<String>("seed").map(|s| s.as_bytes().to_vec())
+            Arc::new(vec![])
         };
 
         let port = matches
@@ -104,7 +124,7 @@ impl Config {
             })
             .unwrap_or_default();
 
-        Config { port, seed, num_threads, bind_addrs }
+        Config { port, keys, num_threads, bind_addrs }
     }
 
     /// Total number of worker threads shared across all sockets (used by the Linux epoll backend).
@@ -129,12 +149,48 @@ fn read_seed_file(path: &str) -> Vec<u8> {
     trimmed.as_bytes().to_vec()
 }
 
+/// Reads a multi-key file where each line has the format `<key> <label>`.
+/// Blank lines and lines starting with `#` are ignored.
+/// Exits the process if the file cannot be read or contains no valid entries.
+fn read_keys_file(path: &str) -> Vec<KeyEntry> {
+    let raw = std::fs::read_to_string(path).unwrap_or_else(|e| {
+        eprintln!("Cannot read keys file '{path}': {e}");
+        std::process::exit(1);
+    });
+
+    let entries: Vec<KeyEntry> = raw
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                return None;
+            }
+            let (key_str, label) = match trimmed.split_once(|c: char| c.is_ascii_whitespace()) {
+                Some((k, l)) => (k, l.trim().to_string()),
+                None => (trimmed, format!("key-{}", i + 1)),
+            };
+            if key_str.is_empty() {
+                eprintln!("Keys file '{path}': empty key on line {}", i + 1);
+                std::process::exit(1);
+            }
+            Some(KeyEntry { key: key_str.as_bytes().to_vec(), label })
+        })
+        .collect();
+
+    if entries.is_empty() {
+        eprintln!("Keys file '{path}' contains no valid entries");
+        std::process::exit(1);
+    }
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_config(num_threads: usize) -> Config {
-        Config { port: 444, seed: None, num_threads, bind_addrs: vec![] }
+        Config { port: 444, keys: Arc::new(vec![]), num_threads, bind_addrs: vec![] }
     }
 
     #[test]
@@ -171,5 +227,40 @@ mod tests {
     fn seed_file_trims_windows_line_ending() {
         let p = write_temp("udp_server_test_seed_crlf.txt", "my-secret\r\n");
         assert_eq!(read_seed_file(p.to_str().unwrap()), b"my-secret");
+    }
+
+    // ── read_keys_file ────────────────────────────────────────────────────────
+
+    #[test]
+    fn keys_file_two_entries() {
+        let p = write_temp("udp_server_test_keys.txt", "key1 label-one\nkey2 label-two\n");
+        let entries = read_keys_file(p.to_str().unwrap());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].key, b"key1");
+        assert_eq!(entries[0].label, "label-one");
+        assert_eq!(entries[1].key, b"key2");
+        assert_eq!(entries[1].label, "label-two");
+    }
+
+    #[test]
+    fn keys_file_ignores_blank_lines_and_comments() {
+        let p = write_temp(
+            "udp_server_test_keys_comments.txt",
+            "# comment\n\nkey1 lbl\n\n# another comment\nkey2 lbl2\n",
+        );
+        let entries = read_keys_file(p.to_str().unwrap());
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].key, b"key1");
+        assert_eq!(entries[1].key, b"key2");
+    }
+
+    #[test]
+    fn keys_file_label_defaults_when_missing() {
+        let p = write_temp("udp_server_test_keys_nolabel.txt", "only-key\n");
+        let entries = read_keys_file(p.to_str().unwrap());
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].key, b"only-key");
+        // Label must be non-empty (exact value is implementation-defined).
+        assert!(!entries[0].label.is_empty());
     }
 }

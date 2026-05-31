@@ -2,7 +2,7 @@ use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
 use std::net::{SocketAddr, SocketAddrV6};
 use std::time::{SystemTime, UNIX_EPOCH};
-use log::debug;
+use log::{debug, trace};
 use sha2::Sha256;
 
 /// A packet whose timestamp is more than this many seconds in the future is rejected.
@@ -13,8 +13,18 @@ const MAX_TIME_DIFF_LATE: u64 = 4 * 60 * 60; // 4 hours
 
 type HmacSha256 = Hmac<Sha256>;
 
+/// One HMAC-SHA256 key with an optional human-readable label used for trace logging.
+pub struct KeyEntry {
+    pub key: Vec<u8>,
+    pub label: String,
+}
+
 /// Validates, authenticates, and produces a response for one UDP packet.
 /// Returns `None` when the packet should be silently dropped.
+///
+/// When `keys` is empty, no authentication is performed and `RE01` is always returned.
+/// Otherwise each key is tried in order; the first that passes the timestamp HMAC wins.
+/// Matching the IP HMAC with the winning key produces `RR01`; a mismatch produces `RE01`.
 ///
 /// Expected packet layout (24 bytes total):
 /// ```text
@@ -24,7 +34,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// [12..20] HMAC-SHA256(seed, timestamp)[0..8]          — timestamp authentication
 /// [20..24] HMAC-SHA256(seed, timestamp ‖ src_ip)[0..4] — source-IP authentication
 /// ```
-pub fn process_packet(packet: &[u8], src_addr: SocketAddr, seed: Option<&[u8]>) -> Option<[u8; 8]> {
+pub fn process_packet(packet: &[u8], src_addr: SocketAddr, keys: &[KeyEntry]) -> Option<[u8; 8]> {
     if !is_valid_header(packet) {
         return None;
     }
@@ -35,23 +45,27 @@ pub fn process_packet(packet: &[u8], src_addr: SocketAddr, seed: Option<&[u8]>) 
         return None;
     }
 
-    // When a seed is configured, verify the timestamp HMAC before any further processing.
-    if let Some(seed) = seed {
-        if !verify_packet_hmac(seed, packet_time, &packet[12..20]) {
-            debug!("HMAC packet mismatch — dropping");
-            return None;
-        }
-    }
-
     let src_v6 = to_v6(src_addr);
     debug!("Source address: {} ({:032x})", src_v6.ip(), src_v6.ip().to_bits());
 
-    // The IP HMAC confirms the packet was not replayed from a different source address.
-    // Without a seed there is no way to verify this, so ip_match stays false → RE01 tag.
-    let ip_match = seed.map_or(false, |seed| {
-        verify_ip_hmac(seed, packet_time, src_v6, &packet[20..24])
+    if keys.is_empty() {
+        // No authentication configured — echo back RE01.
+        return Some(build_response(false, &packet[4..8]));
+    }
+
+    // Try each key; the first that passes the timestamp HMAC wins.
+    let matched = keys.iter().find(|entry| {
+        verify_packet_hmac(&entry.key, packet_time, &packet[12..20])
     });
 
+    let Some(entry) = matched else {
+        debug!("HMAC packet mismatch for all keys — dropping");
+        return None;
+    };
+
+    trace!("Key matched: {}", entry.label);
+
+    let ip_match = verify_ip_hmac(&entry.key, packet_time, src_v6, &packet[20..24]);
     Some(build_response(ip_match, &packet[4..8]))
 }
 
@@ -151,11 +165,16 @@ mod tests {
         SocketAddrV6::new(Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1), 1234, 0, 0)
     }
 
+    /// Wraps a single seed into a one-entry key list.
+    fn keys_from(seed: &[u8]) -> Vec<KeyEntry> {
+        vec![KeyEntry { key: seed.to_vec(), label: "test".to_string() }]
+    }
+
     /// Builds a valid 24-byte RP01 packet.
     ///
     /// When `seed` is `Some`, the HMAC fields are computed correctly for the given
     /// `packet_time` and `src` address. When `seed` is `None`, the HMAC fields are
-    /// zeroed — still accepted by `process_packet` when called with `seed = None`.
+    /// zeroed — still accepted by `process_packet` when called with an empty key list.
     fn make_packet(seed: Option<&[u8]>, seq: &[u8; 4], packet_time: u32, src: SocketAddrV6) -> [u8; 24] {
         let mut p = [0u8; 24];
         p[0..4].copy_from_slice(b"RP01");
@@ -354,24 +373,51 @@ mod tests {
     // ── process_packet ────────────────────────────────────────────────────────
 
     #[test]
-    fn process_no_seed_returns_re01() {
+    fn process_no_keys_returns_re01() {
         let seq = [1u8, 2, 3, 4];
         let src = sample_src();
         let p = make_packet(None, &seq, now_secs(), src);
-        let r = process_packet(&p, SocketAddr::V6(src), None).unwrap();
+        let r = process_packet(&p, SocketAddr::V6(src), &[]).unwrap();
         assert_eq!(&r[..4], b"RE01");
         assert_eq!(&r[4..], &seq);
     }
 
     #[test]
-    fn process_with_seed_and_matching_ip_returns_rr01() {
+    fn process_with_key_and_matching_ip_returns_rr01() {
         let seed = b"test-seed";
         let seq = [9u8, 8, 7, 6];
         let src = sample_src();
         let p = make_packet(Some(seed), &seq, now_secs(), src);
-        let r = process_packet(&p, SocketAddr::V6(src), Some(seed)).unwrap();
+        let keys = keys_from(seed);
+        let r = process_packet(&p, SocketAddr::V6(src), &keys).unwrap();
         assert_eq!(&r[..4], b"RR01");
         assert_eq!(&r[4..], &seq);
+    }
+
+    #[test]
+    fn process_second_key_matches() {
+        // Packet is signed with key2; key1 fails, key2 succeeds → RR01.
+        let key1 = b"wrong-key";
+        let key2 = b"correct-key";
+        let seq = [1u8, 2, 3, 4];
+        let src = sample_src();
+        let p = make_packet(Some(key2), &seq, now_secs(), src);
+        let keys = vec![
+            KeyEntry { key: key1.to_vec(), label: "first".to_string() },
+            KeyEntry { key: key2.to_vec(), label: "second".to_string() },
+        ];
+        let r = process_packet(&p, SocketAddr::V6(src), &keys).unwrap();
+        assert_eq!(&r[..4], b"RR01");
+        assert_eq!(&r[4..], &seq);
+    }
+
+    #[test]
+    fn process_no_key_matches_dropped() {
+        let seed = b"test-seed";
+        let src = sample_src();
+        let p = make_packet(Some(seed), &[0; 4], now_secs(), src);
+        let keys = vec![KeyEntry { key: b"wrong-key".to_vec(), label: "bad".to_string() }];
+        assert!(process_packet(&p, SocketAddr::V6(src), &keys).is_none());
     }
 
     #[test]
@@ -379,13 +425,13 @@ mod tests {
         let src = sample_src();
         let mut p = make_packet(None, &[0; 4], now_secs(), src);
         p[0] = b'X'; // corrupt the magic bytes
-        assert!(process_packet(&p, SocketAddr::V6(src), None).is_none());
+        assert!(process_packet(&p, SocketAddr::V6(src), &[]).is_none());
     }
 
     #[test]
     fn process_too_short_dropped() {
         let src = SocketAddr::V6(sample_src());
-        assert!(process_packet(&[0u8; 10], src, None).is_none());
+        assert!(process_packet(&[0u8; 10], src, &[]).is_none());
     }
 
     #[test]
@@ -394,7 +440,8 @@ mod tests {
         let src = sample_src();
         let old = now_secs() - MAX_TIME_DIFF_LATE as u32 - 10;
         let p = make_packet(Some(seed), &[0; 4], old, src);
-        assert!(process_packet(&p, SocketAddr::V6(src), Some(seed)).is_none());
+        let keys = keys_from(seed);
+        assert!(process_packet(&p, SocketAddr::V6(src), &keys).is_none());
     }
 
     #[test]
@@ -403,7 +450,8 @@ mod tests {
         let src = sample_src();
         let future = now_secs() + MAX_TIME_DIFF_EARLY as u32 + 10;
         let p = make_packet(Some(seed), &[0; 4], future, src);
-        assert!(process_packet(&p, SocketAddr::V6(src), Some(seed)).is_none());
+        let keys = keys_from(seed);
+        assert!(process_packet(&p, SocketAddr::V6(src), &keys).is_none());
     }
 
     #[test]
@@ -412,7 +460,8 @@ mod tests {
         let src = sample_src();
         let mut p = make_packet(Some(seed), &[0; 4], now_secs(), src);
         p[12] ^= 0xFF; // flip bits inside the timestamp HMAC field
-        assert!(process_packet(&p, SocketAddr::V6(src), Some(seed)).is_none());
+        let keys = keys_from(seed);
+        assert!(process_packet(&p, SocketAddr::V6(src), &keys).is_none());
     }
 
     #[test]
@@ -430,7 +479,8 @@ mod tests {
             0,
             0,
         ));
-        let r = process_packet(&p, spoofed, Some(seed)).unwrap();
+        let keys = keys_from(seed);
+        let r = process_packet(&p, spoofed, &keys).unwrap();
         assert_eq!(&r[..4], b"RE01");
         assert_eq!(&r[4..], &seq);
     }
@@ -447,7 +497,8 @@ mod tests {
         let p = make_packet(Some(seed), &seq, now_secs(), mapped);
         // Simulate what recv_from returns for an IPv4 client on a dual-stack socket.
         let src_addr = SocketAddr::V4(SocketAddrV4::new(ipv4, 5678));
-        let r = process_packet(&p, src_addr, Some(seed)).unwrap();
+        let keys = keys_from(seed);
+        let r = process_packet(&p, src_addr, &keys).unwrap();
         assert_eq!(&r[..4], b"RR01");
         assert_eq!(&r[4..], &seq);
     }

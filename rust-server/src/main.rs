@@ -14,7 +14,7 @@ use log::LevelFilter;
 fn main() {
     // Install logger first so that messages from Config::from_args() are visible.
     log::set_boxed_logger(Box::new(logger::DynamicLogger)).unwrap();
-    log::set_max_level(LevelFilter::Debug);
+    log::set_max_level(LevelFilter::Trace);
 
     let config = config::Config::from_args();
 
