@@ -7,7 +7,7 @@ use log::{debug, error, info};
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::config::Config;
-use crate::packet::{self, KeyEntry};
+use crate::packet::{self, SecretEntry};
 
 /// Receive buffer per worker thread — large enough for one RP01 packet.
 const BUFFER_SIZE: usize = 1024;
@@ -57,7 +57,7 @@ impl Server {
         use std::os::fd::AsRawFd;
 
         let num_threads = self.config.num_worker_threads();
-        let keys = self.config.keys;
+        let secrets = self.config.secrets;
         info!("{} socket(s), {num_threads} worker thread(s) total", self.sockets.len());
 
         for s in &self.sockets {
@@ -83,10 +83,10 @@ impl Server {
         let handles: Vec<JoinHandle<()>> = (0..num_threads)
             .map(|idx| {
                 let sockets = sockets.clone();
-                let keys = keys.clone();
+                let secrets = secrets.clone();
                 thread::spawn(move || {
                     debug!("Worker {idx} started");
-                    worker_loop_epoll(epoll_fd, sockets, keys);
+                    worker_loop_epoll(epoll_fd, sockets, secrets);
                 })
             })
             .collect();
@@ -103,17 +103,17 @@ impl Server {
     /// since the thread count is determined by the number of bound sockets.
     #[cfg(not(target_os = "linux"))]
     pub fn run(self) {
-        let keys = self.config.keys;
+        let secrets = self.config.secrets;
         info!("{} socket(s), one blocking thread per socket", self.sockets.len());
 
         let handles: Vec<JoinHandle<()>> = self.sockets
             .into_iter()
             .enumerate()
             .map(|(idx, socket)| {
-                let keys = keys.clone();
+                let secrets = secrets.clone();
                 thread::spawn(move || {
                     debug!("Worker {idx} started (blocking)");
-                    worker_loop_blocking(socket, keys);
+                    worker_loop_blocking(socket, secrets);
                 })
             })
             .collect();
@@ -129,7 +129,7 @@ impl Server {
 /// Non-blocking recv_from is called in a loop until EAGAIN/WouldBlock to ensure all
 /// queued packets are processed before returning to epoll_wait.
 #[cfg(target_os = "linux")]
-fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, keys: Arc<Vec<KeyEntry>>) {
+fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, secrets: Arc<Vec<SecretEntry>>) {
     let mut buffer = [0u8; BUFFER_SIZE];
     let mut events = [libc::epoll_event { events: 0, u64: 0 }; EPOLL_BATCH];
 
@@ -154,7 +154,7 @@ fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, keys: Arc
                     Ok((len, src_addr)) => {
                         debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
                         if let Some(response) =
-                            packet::process_packet(&buffer[..len], src_addr, &keys)
+                            packet::process_packet(&buffer[..len], src_addr, &secrets)
                         {
                             debug!("Sending response: {}", hex::encode(response));
                             if let Err(e) = socket.send_to(&response, src_addr) {
@@ -175,14 +175,14 @@ fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, keys: Arc
 
 /// Runs forever: blocks on recv_from and processes packets one at a time (non-Linux fallback).
 #[cfg(not(target_os = "linux"))]
-fn worker_loop_blocking(socket: Arc<UdpSocket>, keys: Arc<Vec<KeyEntry>>) {
+fn worker_loop_blocking(socket: Arc<UdpSocket>, secrets: Arc<Vec<SecretEntry>>) {
     let mut buffer = [0u8; BUFFER_SIZE];
 
     loop {
         match socket.recv_from(&mut buffer) {
             Ok((len, src_addr)) => {
                 debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
-                if let Some(response) = packet::process_packet(&buffer[..len], src_addr, &keys) {
+                if let Some(response) = packet::process_packet(&buffer[..len], src_addr, &secrets) {
                     debug!("Sending response: {}", hex::encode(response));
                     if let Err(e) = socket.send_to(&response, src_addr) {
                         error!("send_to: {e}");

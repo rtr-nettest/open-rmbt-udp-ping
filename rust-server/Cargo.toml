@@ -1,6 +1,8 @@
 [package]
 name = "udp_server"
-version = "2.1.0"
+# Placeholder only — the real version is derived from the git tag at build time
+# (see build.rs); this Cargo.toml value is the fallback when git is unavailable.
+version = "0.0.0"
 edition = "2024"
 
 [dependencies]

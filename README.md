@@ -36,16 +36,22 @@ FLAGS:
     -V, --version    Prints version information
 
 OPTIONS:
-  -s, --seed <SEED>       HMAC-SHA256 shared secret (visible in process list — prefer --seed-file)
-  -f, --seed-file <PATH>  File containing the HMAC-SHA256 shared secret (one line, whitespace trimmed)
-  -b, --bind <ADDR>       IP address to listen on; may be repeated (default: all interfaces)
-  -t, --threads <N>       Worker threads per bound address (default: logical CPU count)
-  -d, --debug             Enable debug logging at startup (also toggled at runtime via SIGUSR1 on Unix)
-  -p, --port <PORT>       UDP port to listen on (default: 444)
-  -h, --help              Print help
-  -V, --version           Print version
+  -s, --secret <SECRET>     HMAC-SHA256 shared secret (visible in process list — prefer --secret-file)
+  -f, --secret-file <PATH>  File with HMAC-SHA256 shared secrets, one per line: '<secret>[ <label>]'
+  -b, --bind <ADDR>         IP address to listen on; may be repeated (default: all interfaces)
+  -t, --threads <N>         Total worker threads shared across all sockets (default: logical CPU count)
+  -d, --debug               Enable debug logging at startup (also toggled at runtime via SIGUSR1 on Unix)
+  -p, --port <PORT>         UDP port to listen on (default: 444)
+  -h, --help                Print help
+  -V, --version             Print version
 
 ```
+
+Shared secrets are configured with `--secret` and/or `--secret-file`. A secret file holds one
+secret per line in the format `<secret>[ <label>]`; the secret is whitespace-trimmed, the label
+is optional, blank lines and lines starting with `#` are ignored. Secrets without a label are
+named `secret_1`, `secret_2`, … by position. When both options are given, the `--secret` value is
+`secret_1` and the file's secrets follow. With no secret configured, packets are not authenticated.
 
 On Linux debug logging can also be enabled or disabled during runtime using signal `SIGUSR1`.
 
