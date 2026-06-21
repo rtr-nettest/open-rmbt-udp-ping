@@ -7,6 +7,7 @@ use log::{debug, error, info};
 use socket2::{Domain, Protocol, Socket, Type};
 
 use crate::config::Config;
+use crate::events::EventSink;
 use crate::packet::{self, SecretEntry};
 
 /// Receive buffer per worker thread — large enough for one RP01 packet.
@@ -20,13 +21,15 @@ const EPOLL_BATCH: usize = 16;
 pub struct Server {
     config: Config,
     sockets: Vec<Arc<UdpSocket>>,
+    /// Optional structured-event logger; `None` when `--syslog` is not set.
+    sink: Option<Arc<EventSink>>,
 }
 
 impl Server {
     /// Binds one UDP socket for every address in `config.bind_addrs`, or a single
     /// dual-stack wildcard socket when no addresses are specified.
     /// Panics immediately on any bind failure so the server never starts partially bound.
-    pub fn bind(config: Config) -> io::Result<Self> {
+    pub fn bind(config: Config, sink: Option<Arc<EventSink>>) -> io::Result<Self> {
         let sockets: Vec<Arc<UdpSocket>> = if config.bind_addrs.is_empty() {
             info!("Listening on all interfaces, port {}", config.port);
             vec![Arc::new(setup_socket(None, config.port)?)]
@@ -38,12 +41,17 @@ impl Server {
                     info!("Listening on {addr}, port {}", config.port);
                     setup_socket(Some(addr), config.port)
                         .map(Arc::new)
-                        .unwrap_or_else(|e| panic!("Failed to bind to {addr}: {e}"))
+                        .unwrap_or_else(|e| {
+                            if let Some(sink) = &sink {
+                                sink.error("bind", &e);
+                            }
+                            panic!("Failed to bind to {addr}: {e}");
+                        })
                 })
                 .collect()
         };
 
-        Ok(Server { config, sockets })
+        Ok(Server { config, sockets, sink })
     }
 
     /// Starts the epoll dispatch loop (Linux).
@@ -57,7 +65,11 @@ impl Server {
         use std::os::fd::AsRawFd;
 
         let num_threads = self.config.num_worker_threads();
+        if let Some(sink) = &self.sink {
+            sink.startup(self.config.port, &self.config.bind_addrs, self.sockets.len(), self.config.secrets.len());
+        }
         let secrets = self.config.secrets;
+        let sink = self.sink;
         info!("{} socket(s), {num_threads} worker thread(s) total", self.sockets.len());
 
         for s in &self.sockets {
@@ -84,9 +96,10 @@ impl Server {
             .map(|idx| {
                 let sockets = sockets.clone();
                 let secrets = secrets.clone();
+                let sink = sink.clone();
                 thread::spawn(move || {
                     debug!("Worker {idx} started");
-                    worker_loop_epoll(epoll_fd, sockets, secrets);
+                    worker_loop_epoll(epoll_fd, sockets, secrets, sink);
                 })
             })
             .collect();
@@ -103,7 +116,11 @@ impl Server {
     /// since the thread count is determined by the number of bound sockets.
     #[cfg(not(target_os = "linux"))]
     pub fn run(self) {
+        if let Some(sink) = &self.sink {
+            sink.startup(self.config.port, &self.config.bind_addrs, self.sockets.len(), self.config.secrets.len());
+        }
         let secrets = self.config.secrets;
+        let sink = self.sink;
         info!("{} socket(s), one blocking thread per socket", self.sockets.len());
 
         let handles: Vec<JoinHandle<()>> = self.sockets
@@ -111,9 +128,10 @@ impl Server {
             .enumerate()
             .map(|(idx, socket)| {
                 let secrets = secrets.clone();
+                let sink = sink.clone();
                 thread::spawn(move || {
                     debug!("Worker {idx} started (blocking)");
-                    worker_loop_blocking(socket, secrets);
+                    worker_loop_blocking(socket, secrets, sink);
                 })
             })
             .collect();
@@ -129,7 +147,12 @@ impl Server {
 /// Non-blocking recv_from is called in a loop until EAGAIN/WouldBlock to ensure all
 /// queued packets are processed before returning to epoll_wait.
 #[cfg(target_os = "linux")]
-fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, secrets: Arc<Vec<SecretEntry>>) {
+fn worker_loop_epoll(
+    epoll_fd: i32,
+    sockets: Arc<Vec<Arc<UdpSocket>>>,
+    secrets: Arc<Vec<SecretEntry>>,
+    sink: Option<Arc<EventSink>>,
+) {
     let mut buffer = [0u8; BUFFER_SIZE];
     let mut events = [libc::epoll_event { events: 0, u64: 0 }; EPOLL_BATCH];
 
@@ -153,18 +176,26 @@ fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, secrets: 
                 match socket.recv_from(&mut buffer) {
                     Ok((len, src_addr)) => {
                         debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
-                        if let Some(response) =
-                            packet::process_packet(&buffer[..len], src_addr, &secrets)
-                        {
+                        let processed = packet::process_packet(&buffer[..len], src_addr, &secrets);
+                        if let Some(sink) = &sink {
+                            sink.log_outcome(src_addr.ip(), &processed.outcome);
+                        }
+                        if let Some(response) = processed.response {
                             debug!("Sending response: {}", hex::encode(response));
                             if let Err(e) = socket.send_to(&response, src_addr) {
                                 error!("send_to: {e}");
+                                if let Some(sink) = &sink {
+                                    sink.error("send_to", &e);
+                                }
                             }
                         }
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
                     Err(e) => {
                         error!("recv_from: {e}");
+                        if let Some(sink) = &sink {
+                            sink.error("recv_from", &e);
+                        }
                         break;
                     }
                 }
@@ -175,22 +206,36 @@ fn worker_loop_epoll(epoll_fd: i32, sockets: Arc<Vec<Arc<UdpSocket>>>, secrets: 
 
 /// Runs forever: blocks on recv_from and processes packets one at a time (non-Linux fallback).
 #[cfg(not(target_os = "linux"))]
-fn worker_loop_blocking(socket: Arc<UdpSocket>, secrets: Arc<Vec<SecretEntry>>) {
+fn worker_loop_blocking(
+    socket: Arc<UdpSocket>,
+    secrets: Arc<Vec<SecretEntry>>,
+    sink: Option<Arc<EventSink>>,
+) {
     let mut buffer = [0u8; BUFFER_SIZE];
 
     loop {
         match socket.recv_from(&mut buffer) {
             Ok((len, src_addr)) => {
                 debug!("Received (len={len}): {}", hex::encode(&buffer[..len]));
-                if let Some(response) = packet::process_packet(&buffer[..len], src_addr, &secrets) {
+                let processed = packet::process_packet(&buffer[..len], src_addr, &secrets);
+                if let Some(sink) = &sink {
+                    sink.log_outcome(src_addr.ip(), &processed.outcome);
+                }
+                if let Some(response) = processed.response {
                     debug!("Sending response: {}", hex::encode(response));
                     if let Err(e) = socket.send_to(&response, src_addr) {
                         error!("send_to: {e}");
+                        if let Some(sink) = &sink {
+                            sink.error("send_to", &e);
+                        }
                     }
                 }
             }
             Err(e) => {
                 error!("recv_from: {e}");
+                if let Some(sink) = &sink {
+                    sink.error("recv_from", &e);
+                }
             }
         }
     }

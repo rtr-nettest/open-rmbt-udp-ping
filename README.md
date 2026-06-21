@@ -42,6 +42,7 @@ OPTIONS:
   -t, --threads <N>         Total worker threads shared across all sockets (default: logical CPU count)
   -d, --debug               Enable debug logging at startup (also toggled at runtime via SIGUSR1 on Unix)
   -p, --port <PORT>         UDP port to listen on (default: 444)
+      --syslog <TARGET>     Send structured RFC 5424 logs over UDP to TARGET (IP or IP:port; port default 514)
   -h, --help                Print help
   -V, --version             Print version
 
@@ -53,7 +54,44 @@ is optional, blank lines and lines starting with `#` are ignored. Secrets withou
 named `secret_1`, `secret_2`, … by position. When both options are given, the `--secret` value is
 `secret_1` and the file's secrets follow. With no secret configured, packets are not authenticated.
 
-On Linux debug logging can also be enabled or disabled during runtime using signal `SIGUSR1`.
+### Logging
+
+The server has two independent logging channels: human-readable lines on **stderr** (captured by
+systemd/journald) and, optionally, **structured events** sent to a remote collector for ELK.
+
+#### Local logging (stderr)
+
+Each line has the format `<unix-seconds> [LEVEL] <message>`, for example:
+
+```text
+1739347139 [INFO] Listening on 127.0.0.1, port 444
+1739347139 [INFO] 1 socket(s), one blocking thread per socket
+```
+
+`ERROR`, `WARN` and `INFO` are always shown. `DEBUG` and `TRACE` (per-packet timing and HMAC
+details) are emitted only when debug logging is enabled — at startup with `-d`/`--debug`, or
+toggled at runtime on Unix by sending `SIGUSR1` (see [Debug logging](#debug-logging)).
+
+#### Structured event logging (ELK)
+
+`--syslog <IP[:port]>` (off by default, port defaults to 514) ships structured events to a
+collector as UDP **RFC 5424** datagrams with a JSON message body, which ingest directly into
+ELK (Logstash syslog input + `json` filter). Logging is fire-and-forget and never blocks packet
+handling. Events:
+
+- `startup` — version, bound addresses, port, secret count.
+- `error` — bind / `recv_from` / `send_to` failures.
+- `good_ping` — a successful authenticated ping; rate-limited to the first per source IP per
+  minute to bound volume.
+- `auth_fail` — no configured secret matched the packet (rate-limited per second).
+- `ip_mismatch` — the secret matched but the source-IP HMAC did not (typically the client's IP
+  changed via NAT/roaming, not an attack; rate-limited per second).
+
+Example datagram:
+
+```text
+<134>1 2026-06-21T06:32:38.974Z host udp_server 33444 auth - {"event":"good_ping","src":"127.0.0.1","secret":"secret_1"}
+```
 
 ```bash
 cd rust-server
@@ -79,16 +117,18 @@ Format:
 - IP error response: as '!4sI' using: 'RE01', sequence
 
 
-```
 ### Sample debug output
-[2025-02-12T08:18:59Z DEBUG udp_server] Received (len=24): 5250303149e8964b67ac5975c44138a21867e72c07f4136c
-[2025-02-12T08:18:59Z DEBUG udp_server] HMAC packet: c44138a21867e72c
-[2025-02-12T08:18:59Z DEBUG udp_server] HMAC packet matches
-[2025-02-12T08:18:59Z DEBUG udp_server] Source address: ::ffff:62.1.2.3 in hex 00000000000000000000ffff3e010203
-[2025-02-12T08:18:59Z DEBUG udp_server] HMAC IP: 07f4136c
-[2025-02-12T08:18:59Z DEBUG udp_server] Own HMAC IP: 07f4136c
-[2025-02-12T08:18:59Z DEBUG udp_server] HMAC IP matches
-[2025-02-12T08:18:59Z DEBUG udp_server] Sending response: 5252303149e8964b
+
+With debug logging enabled, each received packet produces a trace such as:
+
+```text
+1739347139 [DEBUG] Received (len=24): 5250303149e8964b67ac5975c44138a21867e72c07f4136c
+1739347139 [DEBUG] Time difference: 0.123 s
+1739347139 [DEBUG] Source address: ::ffff:62.1.2.3 (00000000000000000000ffff3e010203)
+1739347139 [DEBUG] HMAC packet received=c44138a21867e72c expected=c44138a21867e72c
+1739347139 [TRACE] Secret matched: secret_1
+1739347139 [DEBUG] HMAC IP received=07f4136c expected=07f4136c
+1739347139 [DEBUG] Sending response: 5252303149e8964b
 ```
 
 ### Service for systemd

@@ -5,9 +5,12 @@
 //! the source IP address to prevent spoofing and replay attacks.
 
 mod config;
+mod events;
 mod logger;
 mod packet;
 mod server;
+
+use std::sync::Arc;
 
 use log::LevelFilter;
 
@@ -18,13 +21,26 @@ fn main() {
 
     let config = config::Config::from_args();
 
+    // Set up the optional UDP syslog event sink before binding, so bind failures are reported.
+    let sink = config.syslog_target.map(|target| {
+        Arc::new(events::EventSink::new(target).unwrap_or_else(|e| {
+            eprintln!("Cannot set up syslog target {target}: {e}");
+            std::process::exit(1);
+        }))
+    });
+
     // On Unix, SIGUSR1 toggles DEBUG_ENABLED at runtime without restarting the server.
     #[cfg(unix)]
     setup_signal_handler();
 
-    server::Server::bind(config)
-        .expect("Failed to bind server sockets")
-        .run();
+    let server = server::Server::bind(config, sink.clone()).unwrap_or_else(|e| {
+        if let Some(sink) = &sink {
+            sink.error("bind", &e);
+        }
+        eprintln!("Failed to bind server sockets: {e}");
+        std::process::exit(1);
+    });
+    server.run();
 }
 
 /// Spawns a background thread that listens for SIGUSR1 and flips `logger::DEBUG_ENABLED`.

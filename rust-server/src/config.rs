@@ -1,4 +1,4 @@
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread;
@@ -19,6 +19,8 @@ pub struct Config {
     pub num_threads: usize,
     /// Addresses to bind to. Empty means bind to all interfaces (dual-stack wildcard).
     pub bind_addrs: Vec<IpAddr>,
+    /// Collector address for UDP syslog event logging. `None` disables event logging.
+    pub syslog_target: Option<SocketAddr>,
 }
 
 impl Config {
@@ -70,6 +72,12 @@ impl Config {
                     .value_name("PORT")
                     .help("UDP port to listen on (default: 444)"),
             )
+            .arg(
+                Arg::new("syslog")
+                    .long("syslog")
+                    .value_name("TARGET")
+                    .help("Send structured RFC 5424 logs over UDP to TARGET (IP or IP:port; port default 514)"),
+            )
             .get_matches();
 
         // Apply the debug flag immediately so subsequent log::debug! calls are visible.
@@ -118,7 +126,11 @@ impl Config {
             })
             .unwrap_or_default();
 
-        Config { port, secrets, num_threads, bind_addrs }
+        let syslog_target = matches
+            .get_one::<String>("syslog")
+            .map(|s| parse_syslog_target(s));
+
+        Config { port, secrets, num_threads, bind_addrs, syslog_target }
     }
 
     /// Total number of worker threads shared across all sockets (used by the Linux epoll backend).
@@ -163,12 +175,32 @@ fn read_secret_file(path: &str, secrets: &mut Vec<SecretEntry>) {
     }
 }
 
+/// Parses a syslog target of the form `IP` or `IP:port`. The port is optional and
+/// defaults to 514. IPv6 addresses must be bracketed when a port is given (`[::1]:514`).
+/// Exits the process on an invalid target.
+fn parse_syslog_target(s: &str) -> SocketAddr {
+    if let Ok(addr) = s.parse::<SocketAddr>() {
+        return addr;
+    }
+    if let Ok(ip) = s.parse::<IpAddr>() {
+        return SocketAddr::new(ip, 514);
+    }
+    eprintln!("Invalid --syslog target '{s}' (expected IP or IP:port)");
+    std::process::exit(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn make_config(num_threads: usize) -> Config {
-        Config { port: 444, secrets: Arc::new(vec![]), num_threads, bind_addrs: vec![] }
+        Config {
+            port: 444,
+            secrets: Arc::new(vec![]),
+            num_threads,
+            bind_addrs: vec![],
+            syslog_target: None,
+        }
     }
 
     #[test]
@@ -239,6 +271,23 @@ mod tests {
         assert_eq!(s[0].label, "lbl");
         assert_eq!(s[1].secret, b"key2");
         assert_eq!(s[1].label, "secret_2");
+    }
+
+    // ── parse_syslog_target ───────────────────────────────────────────────────
+
+    #[test]
+    fn syslog_target_ip_only_defaults_port_514() {
+        assert_eq!(parse_syslog_target("10.0.0.1"), "10.0.0.1:514".parse().unwrap());
+    }
+
+    #[test]
+    fn syslog_target_ip_with_port() {
+        assert_eq!(parse_syslog_target("10.0.0.1:5514"), "10.0.0.1:5514".parse().unwrap());
+    }
+
+    #[test]
+    fn syslog_target_ipv6_bracketed_with_port() {
+        assert_eq!(parse_syslog_target("[::1]:514"), "[::1]:514".parse().unwrap());
     }
 
     #[test]
