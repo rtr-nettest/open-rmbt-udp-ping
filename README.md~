@@ -26,7 +26,7 @@ cd /open-rmbt-udp-ping
 ## Rust server
 
 ```
-UDP Ping Server 2.x.y
+UDP Ping Server 2.0.1
 
 USAGE:
     udp_server [OPTIONS]
@@ -96,11 +96,11 @@ Example datagram:
 ```bash
 cd rust-server
 
-# get build-essential
-apt -y install build-essential
-
 # get rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# get build-essential
+apt -y install build-essential
 
 cd rust-server
 # build
